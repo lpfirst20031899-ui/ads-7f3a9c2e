@@ -354,6 +354,7 @@ tr:hover td{background:var(--surface2)}
     </div>
     <div>
       <div id="crm-status" style="font-size:12px;color:var(--muted)">Натисни для синхронізації</div>
+      <div id="crm-auth" style="font-size:11px;color:var(--muted)"></div>
       <div id="crm-last-sync" style="font-size:10px;color:var(--muted)"></div>
     </div>
     <div style="flex:1;min-width:200px">
@@ -646,6 +647,19 @@ tr:hover td{background:var(--surface2)}
     <div class="cc-title">Області — детальна таблиця</div>
     <div class="cc-sub" id="reg-sub">Клікай по заголовку для сортування</div>
     <div id="tbl-regions"></div>
+  </div>
+  <div class="cc">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+      <div>
+        <div class="cc-title" style="margin:0">Звідки заявки по областях</div>
+        <div class="cc-sub" id="reg-src-sub" style="margin-top:2px">Клікай по рядку, щоб розкрити</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div class="view-toggle" id="vt-reg-depth"></div>
+        <div class="view-toggle" id="vt-reg-sort"></div>
+      </div>
+    </div>
+    <div id="tbl-reg-src"></div>
   </div>
 </div>
 
@@ -1242,6 +1256,11 @@ function getSpendData(applyUserFilter = true) {
 // а рекламний кабінет віддає свої дані під ПОТОЧНОЮ назвою. Тому після перейменування
 // заявки лишались на старій назві, свіжі дані їхали на нову — і рядок у таблиці ставав двома.
 // Мапу «стара → нова» збирає fbSyncRenames() з журналу змін кабінету; тут — застосування.
+// Оголошення тут, а не поряд із proxyLogin(): render() зветься на завантаженні раніше
+// того місця і падав у TDZ («Cannot access 'PROXY_TOKEN_KEY' before initialization»),
+// а разом з ним не малювались закріплені метрики. І не в FB-блоці нижче: генератор
+// дубля вирізає його цілком, і в дублі константа зникала — «is not defined».
+const PROXY_TOKEN_KEY = 'crm_proxy_token';
 const AD_ALIAS_KEY = 'ad_name_aliases';
 let _adAliasCache;
 function adAliasMap() {
@@ -1337,12 +1356,31 @@ const lsUsedBytes = () => Object.keys(localStorage).reduce((n, k) => n + k.lengt
 function fbGetCampaignStatus() { return _fbStatusStore().camp  || null; }
 function fbGetAdsetStatus()    { return _fbStatusStore().adset || null; }
 function fbGetCreoStatus()     { return _fbStatusStore().creo  || null; }
+// Кеш статусів не оновлюється сам — тільки кнопкою «🟢 Статуси FB». Без строку
+// придатності вимкнена в FB кампанія лишалась зеленою скільки завгодно днів: живцем
+// Артем бачив бейджі на кампаніях, які вже не крутяться. 12 годин — статуси міняють
+// протягом дня, добовий кеш показував би вчорашній стан як поточний.
+const FB_STATUS_TTL_H = 12;
+function fbStatusFresh() {
+  const ts = _fbStatusStore().ts;
+  return !!ts && (Date.now() - ts) < FB_STATUS_TTL_H * 3600000;
+}
+function fbStatusAgeLabel() {
+  const ts = _fbStatusStore().ts;
+  if (!ts) return 'статуси FB не завантажені';
+  const h = Math.floor((Date.now() - ts) / 3600000);
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2, '0');
+  const when = `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return h < FB_STATUS_TTL_H ? `статуси FB від ${when}`
+                             : `статуси FB від ${when} — ${h} год, прострочені`;
+}
 function fbStatusBadge(statusMap, name) {
-  if (!statusMap) return '';
+  if (!statusMap || !fbStatusFresh()) return '';
   const key = (name||'').trim().toLowerCase();
   const st = statusMap[key] || statusMap['#' + key];
   if (st !== 'ACTIVE') return '';           // тільки активні ЗАРАЗ → зелений кружечок; інакше нічого
-  return `<span title="Активний у FB зараз" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;vertical-align:middle;box-shadow:0 0 0 2px rgba(34,197,94,.18)"></span>`;
+  return `<span title="Активний у FB: ${fbStatusAgeLabel()}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;vertical-align:middle;box-shadow:0 0 0 2px rgba(34,197,94,.18)"></span>`;
 }
 
 // ─── Palette ───────────────────────────────────────────
@@ -1713,7 +1751,10 @@ function normCat(c, status, id) {
   if (c) return c;
   if (status !== 'active') return 'none';
   const st = id != null ? STATE_STORE[String(id)] : null;
-  return (st === 'noanswer' || st === 'work') ? st : 'unproc';
+  // Робот ще не бачив заявку (свіжа, або в нього вона 'out') — це «Без категорії»,
+  // а не «Не оброблена». Доти fallback був 'unproc', і будь-яка пауза робота надувала
+  // «Не оброблені»: 29.10.2026 це дало б 7 замість 3 за один день.
+  return (st === 'unproc' || st === 'noanswer' || st === 'work') ? st : 'none';
 }
 
 function parseDate(s) {
@@ -1984,6 +2025,22 @@ function barCell(val, pctVal, color) {
 // ─── Main render ───────────────────────────────────────
 function render() {
   saveUIState();
+  // Вік кеша статусів — на самій кнопці: бейджі гаснуть через FB_STATUS_TTL_H, і без
+  // підпису незрозуміло, чому кружечків немає.
+  const _fbBtn = document.getElementById('btn-fb-status');
+  if (_fbBtn) {
+    _fbBtn.title = fbStatusAgeLabel() + '. Тягне ACTIVE-елементи з FB (кампанії + адсети + крео), матч за назвою або FB-id.';
+    _fbBtn.textContent = fbStatusFresh() ? '🟢 Статуси FB' : '⚪ Статуси FB';
+  }
+  // Хто увійшов — у панелі CRM. Без цього незрозуміло, чому дані не тягнуться:
+  // токен міг просто прострочитись, а на екрані лишаються старі дані з localStorage.
+  const _auth = document.getElementById('crm-auth');
+  if (_auth) {
+    const who = getProxyLogin();
+    _auth.innerHTML = who
+      ? `вхід: <strong>${escHtml(who)}</strong> · <a href="#" onclick="proxyLogout();return false" style="color:var(--muted)">вийти</a>`
+      : '';
+  }
   const d = filterData();
   document.getElementById('badge').textContent = d.length.toLocaleString()+' лідів';
   renderKPIs(d);
@@ -2011,12 +2068,15 @@ function renderKPIs(d) {
   const t=d.length;
   const cA=d.filter(r=>r.category==='A').length, cB=d.filter(r=>r.category==='B').length;
   const cC=d.filter(r=>r.category==='C').length;
-  // Три стани замість одного: заявка без категорії — «Не оброблені» / «Недодзвон» /
-  // «У кваліфікації». Розкладає робот станів; без нього все лишається в «Не оброблені».
+  // Три стани замість одного: активна заявка без категорії — «Не оброблені» /
+  // «Недодзвон» / «У кваліфікації». Розкладає робот станів; чого він не бачив,
+  // лишається «Без категорії» (див. normCat).
   const cUnproc=d.filter(r=>normCat(r.category,r.status,r.id)==='unproc').length;
   const cNoans =d.filter(r=>normCat(r.category,r.status,r.id)==='noanswer').length;
   const cWork  =d.filter(r=>normCat(r.category,r.status,r.id)==='work').length;
-  const cNone=d.filter(r=>!r.category && r.status==='lost').length;
+  // Через normCat, а не через `!category && lost`: інакше активна заявка, якої робот
+  // ще не знає, не падала б ні в одну плитку і перший ряд перестав би давати «Всього».
+  const cNone=d.filter(r=>normCat(r.category,r.status,r.id)==='none').length;
   const cAct=d.filter(r=>r.status==='active').length, cLost=d.filter(r=>r.status==='lost').length;
   // Оплати навмисно НЕ тут: закріплений рядок — про якість лідів, а оплати живуть у вкладці «💰 Оплати».
   document.getElementById('kpis').innerHTML=[
@@ -2096,6 +2156,113 @@ function renderRegions(d) {
   });
   renderDimTable('tbl-regions', 'regions', map, spendMap, aMap,
                  Object.keys(spendMap).length > 0, null, null, {lost: lostMap, won: wonMap});
+  renderRegionSources(rows);
+}
+
+// ─── Звідки заявки по областях: область → кампанія → адсет ──────────────────
+// Чому дерево, а не кросс-таблиця: областей 25, кампаній близько 20, адсетів більше —
+// плоска таблиця дає під 500 рядків, і в ній нічого не видно. Дерево відкриває
+// тільки те, що зараз цікавить, і зберігає порядок «де найбільше заявок».
+// Грошей тут немає навмисно: питання блоку — скільки заявок і якої якості дала
+// кампанія в області. Тому генератор дубля переносить блок як є, без якорів.
+let _regOpen = new Set();          // ключі розкритих рядків: 'обл' і 'обл|кампанія'
+let _regDepth = 'adset';           // до якого рівня взагалі можна розкривати
+let _regSort = 'n';                // 'n' — за кількістю заявок, 'pa' — за часткою A
+
+// Ключ їде в onclick через два екранування: спершу для JS-рядка (бекслеш, апостроф),
+// потім для HTML-атрибута. Назви кампаній живуть з апострофами («П'ятниця»), і без
+// цього рядок onclick рвався посередині.
+const regKeyAttr = k => escHtml(String(k).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+
+function regToggle(key) {
+  if (_regOpen.has(key)) _regOpen.delete(key); else _regOpen.add(key);
+  renderRegions(filterData());
+}
+// Глибину тримає тільки `_regDepth` у renderRegionSources. Чистити ще й `_regOpen`
+// не треба: тоді повернення на «До адсетів» губило б те, що вже було розкрито,
+// а сторож не міг би розрізнити два механізми — обидва давали однаковий екран.
+function regSetDepth(v) { _regDepth = v; renderRegions(filterData()); }
+function regSetSort(v)  { _regSort = v; renderRegions(filterData()); }
+
+/** Згортає набір заявок у {n, A, B, C, none, dup}. */
+function regAgg(list) {
+  const v = {n: list.length, A: 0, B: 0, C: 0, none: 0, dup: 0};
+  list.forEach(r => {
+    v[r.category === 'A' || r.category === 'B' || r.category === 'C' ? r.category : 'none']++;
+    if (isDup(r)) v.dup++;
+  });
+  return v;
+}
+const regPA = v => v.n ? v.A / v.n * 100 : 0;
+// Сортування за часткою A без порогу обманює: одна заявка категорії A дає 100 %
+// і виносить рядок наверх. MIN_N тут той самий, що в рекомендаціях «Аналітики».
+const regCmp = (a, b) => _regSort === 'pa'
+  ? (b.v.n >= MIN_N) - (a.v.n >= MIN_N) || regPA(b.v) - regPA(a.v) || b.v.n - a.v.n
+  : b.v.n - a.v.n || regPA(b.v) - regPA(a.v);
+
+function renderRegionSources(rows) {
+  const host = document.getElementById('tbl-reg-src');
+  if (!host) return;
+  const sub = document.getElementById('reg-src-sub');
+  document.getElementById('vt-reg-depth').innerHTML = [['camp','До кампаній'],['adset','До адсетів']]
+    .map(([k,l]) => `<button class="vt-btn${_regDepth===k?' active':''}" onclick="regSetDepth('${k}')">${l}</button>`).join('');
+  document.getElementById('vt-reg-sort').innerHTML = [['n','За заявками'],['pa','За % A']]
+    .map(([k,l]) => `<button class="vt-btn${_regSort===k?' active':''}" onclick="regSetSort('${k}')">${l}</button>`).join('');
+  if (!rows.length) { host.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">Немає заявок із заповненою локацією</div>'; return; }
+
+  // Дерево: область → кампанія → адсет. Назви беремо вже зведені (applyAdAliases),
+  // тому перейменований адсет не дає двох гілок.
+  const tree = {};
+  rows.forEach(r => {
+    const reg = r._reg || 'Не вказано';
+    const camp = String(r.campaign || '').trim() || 'Без кампанії';
+    const adset = String(r.adset || '').trim() || 'Без адсета';
+    ((tree[reg] = tree[reg] || {})[camp] = tree[reg][camp] || {})[adset] = (tree[reg][camp][adset] || []).concat([r]);
+  });
+  const flat = o => Object.values(o).flatMap(x => Array.isArray(x) ? x : flat(x));
+  const regions = Object.entries(tree).map(([name, camps]) => ({name, camps, v: regAgg(flat(camps))})).sort(regCmp);
+  if (sub) sub.textContent = `${regions.length} областей · ${rows.length} заявок із локацією. `
+    + (_regSort === 'pa' ? `Сортування за % A, рядки з менш як ${MIN_N} заявками — нижче.` : 'Сортування за кількістю заявок.')
+    + ' Клікай по рядку, щоб розкрити.';
+
+  const cell = (v, t) => `<td style="text-align:right;padding:6px 10px;font-variant-numeric:tabular-nums">${v}<span style="color:var(--muted);font-weight:400;font-size:10px"> ${pct(v,t)}</span></td>`;
+  const num = v => `<td style="text-align:right;padding:6px 10px;font-weight:700;font-variant-numeric:tabular-nums">${v}</td>`;
+  const paCell = v => { const p = regPA(v); const dim = v.n < MIN_N;
+    return `<td style="text-align:right;padding:6px 10px;font-weight:700;font-variant-numeric:tabular-nums;color:${dim?'var(--muted)':'var(--a)'}" title="${dim?'заявок менше за MIN_N ('+MIN_N+') — частка ненадійна':''}">${p.toFixed(0)}%</td>`; };
+  // Відступ і шеврон — єдине, що відрізняє рівні: три різні верстки читались як три таблиці.
+  // Бейджів FB тут навмисно немає: у дублі без грошей FB вирізаний цілком, і бейдж у цьому
+  // блоці означав би ще два якорі в генераторі. Що зараз крутиться — видно на «Кампаніях».
+  const label = (txt, lvl, open, clickable) => {
+    const pad = 10 + lvl * 18;
+    const chev = clickable ? `<span style="display:inline-block;width:12px;color:var(--muted)">${open ? '▾' : '▸'}</span>` : '<span style="display:inline-block;width:12px"></span>';
+    const w = lvl === 0 ? 700 : lvl === 1 ? 600 : 400;
+    const c = lvl === 2 ? 'var(--muted)' : 'var(--text)';
+    return `<td style="padding:6px 10px 6px ${pad}px;font-weight:${w};color:${c};max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(txt)}">${chev}${escHtml(txt)}</td>`;
+  };
+
+  let h = '<div class="tbl-wrap"><table style="border-collapse:collapse;width:100%;font-size:11px"><thead><tr>'
+    + ['Область / кампанія / адсет','Заявок','A','B','C','Без кат.','% A']
+      .map((t,i) => `<th style="cursor:default;text-align:${i?'right':'left'}">${t}</th>`).join('')
+    + '</tr></thead><tbody>';
+  const row = (lbl, v, bg) => `<tr style="${bg}">${lbl}${num(v.n)}${cell(v.A,v.n)}${cell(v.B,v.n)}${cell(v.C,v.n)}${cell(v.none,v.n)}${paCell(v)}</tr>`;
+
+  regions.forEach(R => {
+    const open = _regOpen.has(R.name);
+    h += row(label(R.name, 0, open, true), R.v,
+             `cursor:pointer;background:rgba(124,140,248,.07);border-top:1px solid var(--border)" onclick="regToggle('${regKeyAttr(R.name)}')`);
+    if (!open) return;
+    const camps = Object.entries(R.camps).map(([name, adsets]) => ({name, adsets, v: regAgg(flat(adsets))})).sort(regCmp);
+    camps.forEach(Cc => {
+      const ck = R.name + '|' + Cc.name;
+      const copen = _regDepth === 'adset' && _regOpen.has(ck);
+      h += row(label(Cc.name, 1, copen, _regDepth === 'adset'), Cc.v,
+               _regDepth === 'adset' ? `cursor:pointer" onclick="regToggle('${regKeyAttr(ck)}')` : '');
+      if (!copen) return;
+      Object.entries(Cc.adsets).map(([name, list]) => ({name, v: regAgg(list)})).sort(regCmp)
+        .forEach(A => { h += row(label(A.name, 2, false, false), A.v, ''); });
+    });
+  });
+  host.innerHTML = h + '</tbody></table></div>';
 }
 
 function renderOverview(d) {
@@ -3805,7 +3972,10 @@ function renderDaily(d) {
       <button class="vt-btn${tableGran==='month'?' active':''}" onclick="window._dailyTableGran='month';render()">По місяцях</button>
     </div>`;
     const titleLbl=tableGran==='day'?'По днях':tableGran==='week'?'По тижнях':'По місяцях';
-    const todayISO=new Date().toISOString().slice(0,10);
+    // Локальна доба браузера, не UTC: toISOString() з 22:00 за Києвом узимку
+    // підсвічував уже наступний день.
+    const _td=new Date();
+    const todayISO=`${_td.getFullYear()}-${String(_td.getMonth()+1).padStart(2,'0')}-${String(_td.getDate()).padStart(2,'0')}`;
     let tbl=`<div class="cc"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px"><div class="cc-title" style="margin:0">${titleLbl}</div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${granBtns}${mainToggle}</div></div>`;
     tbl+=`<div class="tbl-wrap"><table style="border-collapse:collapse;width:100%"><thead><tr>`;
     tbl+=`<th style="${stickyTh}">Метрика</th>`;
@@ -5376,10 +5546,10 @@ function applyRestoredCRMData(active, lost, won) {
       const isCloud = !proxyUrl.includes('localhost') && !proxyUrl.includes('127.0.0.1');
       if (isCloud) {
         const _sig = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined;
-        const r = await fetch(proxyUrl + '/api/data', {
+        const r = await proxyFetch(proxyUrl, '/api/data', {
           headers: { 'ngrok-skip-browser-warning': 'true' },
           ...(  _sig ? { signal: _sig } : {})
-        });
+        }, true);
         if (r.ok) {
           const d = await r.json();
           if ((d.active && d.active.length) || (d.lost && d.lost.length)) {
@@ -5590,6 +5760,110 @@ function getCRMProxyUrl() {
   }
   return 'https://crm-proxy-n0ib.onrender.com';
 }
+// ─── Вхід у проксі: токен підписує сам проксі ───────────────────────────────
+// На GitHub Pages серверної функції немає, а підписати токен на клієнті не можна —
+// секрет приїхав би у браузер разом зі сторінкою. Тому пароль іде POST /api/login,
+// проксі перевіряє його в себе і віддає підписаний `exp.sig`. Токен живе в
+// localStorage: вводити пароль щоразу не треба, строк задає TOKEN_DAYS на Render.
+function getProxyToken() {
+  const t = localStorage.getItem(PROXY_TOKEN_KEY) || '';
+  // Прострочений віддавати не треба: інакше кожен запит іде по колу 401 → prompt.
+  const exp = Number(String(t).split('.')[0]);
+  return (exp && exp * 1000 > Date.now()) ? t : '';
+}
+
+/** URL запиту до проксі з токеном. Локальний проксі воріт не має — там токен лишній. */
+/** Токен: `exp.логін.підпис`. Строк — перше поле, логін — друге. */
+function apiUrl(proxyUrl, path) {
+  const t = getProxyToken();
+  if (!t || _isLocalProxy(proxyUrl)) return proxyUrl + path;
+  return proxyUrl + path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(t);
+}
+
+/** Логін із токена — щоб показати, хто увійшов, і дати кнопку «вийти». */
+function getProxyLogin() {
+  return String(getProxyToken()).split('.')[1] || '';
+}
+
+function proxyLogout() {
+  localStorage.removeItem(PROXY_TOKEN_KEY);
+  render();
+}
+
+/**
+ * Форма входу: логін + пароль. `prompt` тут не годиться — він однопольний, а пароль
+ * у ньому ще й видно на екрані. Повертає Promise з {login, password} або null.
+ */
+function askCredentials() {
+  return new Promise(resolve => {
+    const back = document.createElement('div');
+    back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
+    back.innerHTML = `
+      <form style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px;min-width:280px;max-width:92vw;display:flex;flex-direction:column;gap:12px">
+        <div style="font-weight:700;font-size:14px">Вхід до даних CRM</div>
+        <input name="login" placeholder="Логін" autocomplete="username"
+               style="padding:9px 11px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px">
+        <input name="password" type="password" placeholder="Пароль" autocomplete="current-password"
+               style="padding:9px 11px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px">
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+          <button type="button" data-x="cancel" style="padding:7px 13px;border-radius:6px;border:1px solid var(--border);background:var(--surface3);color:var(--muted);font-size:12px;cursor:pointer">Скасувати</button>
+          <button type="submit" style="padding:7px 13px;border-radius:6px;border:0;background:var(--accent);color:#0b1020;font-weight:700;font-size:12px;cursor:pointer">Увійти</button>
+        </div>
+      </form>`;
+    const done = v => { back.remove(); document.removeEventListener('keydown', onEsc); resolve(v); };
+    const onEsc = e => { if (e.key === 'Escape') done(null); };
+    back.querySelector('[data-x=cancel]').onclick = () => done(null);
+    back.querySelector('form').onsubmit = e => {
+      e.preventDefault();
+      const f = e.target;
+      const login = f.login.value.trim(), password = f.password.value;
+      if (!login || !password) return;
+      done({ login, password });
+    };
+    document.addEventListener('keydown', onEsc);
+    document.body.appendChild(back);
+    back.querySelector('[name=login]').focus();
+  });
+}
+
+/**
+ * Запитати логін/пароль і зберегти токен. Повертає true, якщо токен отримано.
+ * quiet=true — не чіпати користувача (фонові спроби на старті).
+ */
+async function proxyLogin(proxyUrl, quiet) {
+  if (quiet) return false;
+  const cr = await askCredentials();
+  if (!cr) return false;
+  try {
+    const r = await fetch(proxyUrl + '/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+      body: JSON.stringify(cr),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.t) {
+      localStorage.setItem(PROXY_TOKEN_KEY, d.t);
+      return true;
+    }
+    alert(d.message || ('Вхід не вдався: HTTP ' + r.status));
+  } catch (e) {
+    alert('Проксі не відповів: ' + (e.message || 'помилка'));
+  }
+  return false;
+}
+
+/**
+ * fetch до проксі з воротами: на 401 просить пароль і повторює РІВНО один раз.
+ * Без обмеження повтору прострочений пароль дав би нескінченний цикл запитів.
+ */
+async function proxyFetch(proxyUrl, path, opts, quiet) {
+  let r = await fetch(apiUrl(proxyUrl, path), opts);
+  if (r.status !== 401) return r;
+  localStorage.removeItem(PROXY_TOKEN_KEY);
+  if (!(await proxyLogin(proxyUrl, quiet))) return r;
+  return fetch(apiUrl(proxyUrl, path), opts);
+}
+
 function saveCRMProxyUrl(val) {
   val = val.trim().replace(/\/$/, '');
   if (val) localStorage.setItem('crm_proxy_url', val);
@@ -5630,7 +5904,7 @@ async function testCRMProxyUrl() {
     }
   }
   try {
-    const r = await fetch(proxyUrl + '/api/ping', {
+    const r = await proxyFetch(proxyUrl, '/api/ping', {
       headers: { 'ngrok-skip-browser-warning': 'true' }
     });
     if (r.ok) {
@@ -5666,7 +5940,9 @@ async function _wakeServer(proxyUrl, maxSec) {
         headers: { 'ngrok-skip-browser-warning': 'true' },
         signal: AbortSignal.timeout(5000)
       });
-      if (r.ok) return true;
+      // 401 теж означає «прокинувся»: ворота відповіли, значить інстанс живий.
+      // Інакше з воротами будилка крутилась би всі 70 секунд і здавалась.
+      if (r.ok || r.status === 401) return true;
     } catch(e) { /* server still sleeping */ }
     await new Promise(res => setTimeout(res, 3000));
   }
@@ -5701,10 +5977,24 @@ async function startCRMSync(mode) {
     setCRMStatus('Підключення до сервера...', 'var(--muted)');
   }
 
+  // EventSource не дає прочитати статус відповіді — на 401 він просто падає в onerror
+  // без тексту. Тому питаємо проксі ДО відкриття потоку одним дешевим /api/ping:
+  // 200 — воріт немає, токен не потрібен; 401 — proxyFetch сам попросить логін і пароль.
+  // Безумовний запит токена тут не годиться: доки на Render не задані змінні воріт,
+  // форма входу просто блокувала б синк, а /api/login віддавав би 503.
+  if (isCloud) {
+    const gate = await proxyFetch(proxyUrl, '/api/ping', {
+      headers: { 'ngrok-skip-browser-warning': 'true' }
+    });
+    if (gate.status === 401) {
+      setCRMStatus('⚠ Без входу дані CRM недоступні', 'var(--lost)');
+      enableSyncBtns(); return;
+    }
+  }
   const sep = syncParam.includes('?') ? '&' : '?';
   // Акумулятори для SSE-чанків (дані йдуть прямо в потоці — без /api/data запиту)
   const _sseActive = [], _sseLost = [], _sseWon = [];
-  const es = new EventSource(proxyUrl + '/api/sync' + syncParam + sep + 'ngrok-skip-browser-warning=true');
+  const es = new EventSource(apiUrl(proxyUrl, '/api/sync' + syncParam + sep + 'ngrok-skip-browser-warning=true'));
 
   es.onmessage = function(e) {
     try {
