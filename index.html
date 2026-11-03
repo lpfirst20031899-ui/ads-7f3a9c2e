@@ -2290,7 +2290,9 @@ function renderOverview(d) {
   const totalSpend = sd.reduce((acc, s) => acc + (s.spend || 0), 0);
   const totalLeads = d.length;
   const totalA = d.filter(r => r.category === 'A').length;
-  const totalAB = totalA + d.filter(r => r.category === 'B').length;
+  // Тільки B, без A (Артем, 04.11.2026): ціна A і ціна A+B відповідали на схоже
+  // питання, а ціна саме B-ліда ніде не було видно.
+  const totalB = d.filter(r => r.category === 'B').length;
   // Рахується з відфільтрованого d → реагує на ВСІ фільтри.
   const dupCount   = d.filter(isDup).length;
   const leadsNoDup = totalLeads - dupCount;
@@ -2298,7 +2300,7 @@ function renderOverview(d) {
   const cpl   = (totalSpend && totalLeads) ? totalSpend / totalLeads : 0;
   const cplND = (totalSpend && leadsNoDup) ? totalSpend / leadsNoDup : 0;
   const cplA  = (totalSpend && totalA)     ? totalSpend / totalA     : 0;
-  const cplAB = (totalSpend && totalAB)    ? totalSpend / totalAB    : 0;
+  const cplB  = (totalSpend && totalB)     ? totalSpend / totalB     : 0;
   // Ціна продажу = скільки реклами пішло на одну оплату (витрати ÷ кількість оплат за період).
   const cWonOv = filterWon().length;
   const cps    = (totalSpend && cWonOv) ? totalSpend / cWonOv : 0;
@@ -2309,7 +2311,7 @@ function renderOverview(d) {
     {l:'Ціна ліда (CPL)',     v: cpl  ? '$'+cpl.toFixed(1)  : '—', s: totalLeads+' лідів у вибірці',  kc:'var(--cpl)'},
     {l:'Ціна ліда без дублів',v: cplND? '$'+cplND.toFixed(1): '—', s: leadsNoDup+' унікальних лідів', kc:'var(--cpl)'},
     {l:'Ціна ліда A (CPL-A)', v: cplA ? '$'+cplA.toFixed(1) : '—', s: totalA+' A-лідів у вибірці',   kc:'var(--a)'},
-    {l:'Ціна ліда A+B',       v: cplAB? '$'+cplAB.toFixed(1): '—', s: totalAB+' A+B лідів у вибірці', kc:'var(--b)'},
+    {l:'Ціна ліда B (CPL-B)', v: cplB ? '$'+cplB.toFixed(1) : '—', s: totalB+' B-лідів у вибірці',   kc:'var(--b)'},
     {l:'Ціна продажу',        v: cps  ? '$'+Math.round(cps).toLocaleString('en-US') : '—', s: cWonOv+' оплат · витрати÷оплати', kc:'var(--a)'},
   ].map(k=>`<div class="kpi" style="--kc:${k.kc}"><div class="kpi-label">${k.l}</div><div class="kpi-value">${k.v}</div><div class="kpi-sub">${k.s}</div></div>`).join('');
 
@@ -2778,7 +2780,7 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     const unp=v.unproc||0, non=v.none||0, nans=v.noanswer||0, wrk=v.work||0;
     const sp = spendMap?.[nk(name)] || 0;
     const aLeads = aMap?.[name] || 0;
-    const abLeads = (v.A||0)+(v.B||0);
+    const bLeads = v.B||0;
     const uniq = t - (v.dup||0);
     const lostN = extra?.lost?.[name] || 0, wonN = extra?.won?.[name] || 0;
     return {name, total:t, A:v.A||0, B:v.B||0, C:v.C||0, none:non, unproc:unp,
@@ -2790,7 +2792,7 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
             pU:t?+(unp/t*100).toFixed(1):0, pNa:t?+(nans/t*100).toFixed(1):0,
             pW:t?+(wrk/t*100).toFixed(1):0,
             sp, cpl: (t&&sp)?sp/t:0, cplU: (uniq&&sp)?sp/uniq:0, cplA: (aLeads&&sp)?sp/aLeads:0,
-            cplAB: (abLeads&&sp)?sp/abLeads:0,
+            cplB: (bLeads&&sp)?sp/bLeads:0,
             ...metrics7(w7?.map[name], w7?.spend[nk(name)]) };
   });
   const cols=[
@@ -2823,7 +2825,7 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     cols.push({key:'cpl',  label:'CPL $',               fn:r=>cplCell(r.cpl)});
     cols.push({key:'cplU', label:CPL_U_LBL,             fn:r=>cplCell(r.cplU)});
     cols.push({key:'cplA', label:'CPL A $',             fn:r=>cplACell(r.cplA)});
-    cols.push({key:'cplAB',label:'CPL A+B $',           fn:r=>cplACell(r.cplAB,'var(--b)')});
+    cols.push({key:'cplB', label:'CPL B $',             fn:r=>cplACell(r.cplB,'var(--b)')});
   }
   if (extra && hasSpend) cols.push({key:'cpo', label:'Ціна оплати $', fn:r=>cplACell(r.cpo)});
   makeDimTable(containerId, cols, rows, stateKey, w7 ? w7.lbl : '');
@@ -2877,7 +2879,7 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
       pNa:t?+((v.noanswer||0)/t*100).toFixed(1):0, pW:t?+((v.work||0)/t*100).toFixed(1):0,
       pN:t?+((v.none||0)/t*100).toFixed(1):0,
       sp, cpl:(t&&sp)?sp/t:0, cplU:(uniq&&sp)?sp/uniq:0, cplA:(aLeads&&sp)?sp/aLeads:0,
-      cplAB:(((v.A||0)+(v.B||0))&&sp)?sp/((v.A||0)+(v.B||0)):0,
+      cplB:((v.B||0)&&sp)?sp/(v.B||0):0,
       ...metrics7(lead7[nca], w?.sm.campAdset[nca]) };
   }).sort((a,b) => b.total - a.total);
   // ── Apply range filter (від — до) ──
@@ -2913,7 +2915,7 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
     cols.push({key:'cpl',  label:'CPL $',               fn:r=>cplCell(r.cpl)});
     cols.push({key:'cplU', label:CPL_U_LBL,             fn:r=>cplCell(r.cplU)});
     cols.push({key:'cplA', label:'CPL A $',             fn:r=>cplACell(r.cplA)});
-    cols.push({key:'cplAB',label:'CPL A+B $',           fn:r=>cplACell(r.cplAB,'var(--b)')});
+    cols.push({key:'cplB', label:'CPL B $',             fn:r=>cplACell(r.cplB,'var(--b)')});
   }
   makeDimTable(containerId, cols, rows, stateKey, w ? w.lbl : '');
 }
@@ -3948,7 +3950,7 @@ function renderDaily(d) {
     const ptSp=periods.reduce((s,p)=>s+(pSp[p]||0),0);
     const ptCPL=(ptL&&ptSp)?ptSp/ptL:0;
     const ptCPLA=(ptA&&ptSp)?ptSp/ptA:0;
-    const ptCPLAB=((ptA+ptB)&&ptSp)?ptSp/(ptA+ptB):0;
+    const ptCPLB=(ptB&&ptSp)?ptSp/ptB:0;
     const ptPA=ptL?ptA/ptL*100:0;
     const pMet=[
       {label:'Лідів',color:'var(--text)',val:p=>pDM[p]?.n||0,tot:()=>ptL,fmt:v=>v?`<strong>${v}</strong>`:`<span style="color:var(--border)">—</span>`},
@@ -3964,7 +3966,7 @@ function renderDaily(d) {
       pMet.push({label:'Витрати $',color:'var(--spend)',sep:true,val:p=>Math.round(pSp[p]||0),tot:()=>Math.round(ptSp),fmt:v=>v?`<span style="color:var(--spend);font-weight:600">$${Number(v).toLocaleString('en-US')}</span>`:`<span style="color:var(--border)">—</span>`});
       pMet.push({label:'CPL $',color:'var(--cpl)',bold:true,val:p=>{const n=pDM[p]?.n||0,sp=pSp[p]||0;return(n&&sp)?+(sp/n).toFixed(1):0;},tot:()=>+ptCPL.toFixed(1),fmt:v=>v?`<span style="color:var(--cpl);font-weight:700">$${Number(v).toFixed(1)}</span>`:`<span style="color:var(--border)">—</span>`});
       pMet.push({label:'CPL-A $',color:'var(--a)',bold:true,val:p=>{const a=pDM[p]?.A||0,sp=pSp[p]||0;return(a&&sp)?+(sp/a).toFixed(1):0;},tot:()=>+ptCPLA.toFixed(1),fmt:v=>v?`<span style="color:var(--a);font-weight:700">$${Number(v).toFixed(1)}</span>`:`<span style="color:var(--border)">—</span>`});
-      pMet.push({label:'CPL-A+B $',color:'var(--b)',bold:true,val:p=>{const a=(pDM[p]?.A||0)+(pDM[p]?.B||0),sp=pSp[p]||0;return(a&&sp)?+(sp/a).toFixed(1):0;},tot:()=>+ptCPLAB.toFixed(1),fmt:v=>v?`<span style="color:var(--b);font-weight:700">$${Number(v).toFixed(1)}</span>`:`<span style="color:var(--border)">—</span>`});
+      pMet.push({label:'CPL-B $',color:'var(--b)',bold:true,val:p=>{const b=pDM[p]?.B||0,sp=pSp[p]||0;return(b&&sp)?+(sp/b).toFixed(1):0;},tot:()=>+ptCPLB.toFixed(1),fmt:v=>v?`<span style="color:var(--b);font-weight:700">$${Number(v).toFixed(1)}</span>`:`<span style="color:var(--border)">—</span>`});
     }
     const granBtns=`<div class="view-toggle">
       <button class="vt-btn${tableGran==='day'?' active':''}" onclick="window._dailyTableGran='day';render()">По днях</button>
@@ -4070,8 +4072,8 @@ function renderDaily(d) {
       metrics.push({ id:'cpla', label:'CPL-A $', color:'#34d399',
         data: xKeys.map(k=>{ const a=aggDayMap[k]?.A||0; const sp=aggSpendMap[k]||0; return (a&&sp)?+(sp/a).toFixed(2):0; }),
         enabled:false, yAxis:'y1' });
-      metrics.push({ id:'cplab', label:'CPL-A+B $', color:'#a78bfa',
-        data: xKeys.map(k=>{ const ab=(aggDayMap[k]?.A||0)+(aggDayMap[k]?.B||0); const sp=aggSpendMap[k]||0; return (ab&&sp)?+(sp/ab).toFixed(2):0; }),
+      metrics.push({ id:'cplb', label:'CPL-B $', color:'#a78bfa',
+        data: xKeys.map(k=>{ const b=aggDayMap[k]?.B||0; const sp=aggSpendMap[k]||0; return (b&&sp)?+(sp/b).toFixed(2):0; }),
         enabled:false, yAxis:'y1' });
     }
 
@@ -4745,7 +4747,7 @@ function renderAnalyst(d) {
 
   // Build spend + A-leads per entity → CPL, CPL-A
   function buildEntitySpend(keyFn, aKeyFn) {
-    const spMap = {}, aLeadsMap = {}, abLeadsMap = {}, leadsMap = {};
+    const spMap = {}, aLeadsMap = {}, bLeadsMap = {}, leadsMap = {};
     spendAll.forEach(s => {
       const k = keyFn(s); if (!k) return;
       spMap[k] = (spMap[k]||0) + s.spend;
@@ -4754,22 +4756,22 @@ function renderAnalyst(d) {
       const k = (aKeyFn||keyFn)(r); if (!k) return;
       leadsMap[k] = (leadsMap[k]||0) + 1;
       if (r.category === 'A') aLeadsMap[k] = (aLeadsMap[k]||0) + 1;
-      if (r.category === 'A' || r.category === 'B') abLeadsMap[k] = (abLeadsMap[k]||0) + 1;
+      if (r.category === 'B') bLeadsMap[k] = (bLeadsMap[k]||0) + 1;
     });
     const result = {};
     Object.keys(spMap).forEach(k => {
       const sp = spMap[k] || 0;
       const leads  = leadsMap[k]  || 0;
       const aLeads = aLeadsMap[k] || 0;
-      const abLeads = abLeadsMap[k] || 0;
+      const bLeads = bLeadsMap[k] || 0;
       result[k] = {
         sp,
         leads,
         aLeads,
-        abLeads,
+        bLeads,
         cpl:   (sp && leads)   ? sp/leads   : null,
         cplA:  (sp && aLeads)  ? sp/aLeads  : null,
-        cplAB: (sp && abLeads) ? sp/abLeads : null,
+        cplB: (sp && bLeads) ? sp/bLeads : null,
       };
     });
     return result;
@@ -5033,9 +5035,9 @@ function renderAnalyst(d) {
   const objHead = `<th title="Оброблено (є рішення) / Необроблено (в черзі)">Оброб/<br>необр</th><th title="Скільки днів отримує ліди">Днів</th>`;
   const objCells = e => `<td style="text-align:center;font-size:11px">${e.processed}<span style="color:var(--muted)"> / ${e.unproc||0}</span></td><td style="text-align:center;font-size:11px;color:var(--muted)">${e.durationDays}</td>`;
   /* Трійка цін однакова у Кампаніях, Адсетах і Крео — правити тут, а не в трьох таблицях. */
-  const cplHead  = `<th style="border-left:2px solid var(--border)">CPL $</th><th>CPL-A $</th><th>CPL-A+B $</th>`;
+  const cplHead  = `<th style="border-left:2px solid var(--border)">CPL $</th><th>CPL-A $</th><th>CPL-B $</th>`;
   const cplTd    = (v, color, style='') => `<td style="text-align:center;${style}">${v!==null&&v>0 ? `<span style="color:${color};font-weight:600">$${v.toFixed(1)}</span>` : '<span style="color:var(--border)">—</span>'}</td>`;
-  const cplCells = e => cplTd(e.sp.cpl,'var(--spend)','border-left:2px solid var(--border)') + cplTd(e.sp.cplA,'var(--a)') + cplTd(e.sp.cplAB,'var(--b)');
+  const cplCells = e => cplTd(e.sp.cpl,'var(--spend)','border-left:2px solid var(--border)') + cplTd(e.sp.cplA,'var(--a)') + cplTd(e.sp.cplB,'var(--b)');
   const pAHead = `<th>% A<br><span style="font-weight:400;font-size:9px;color:var(--muted)">серед оброб.</span></th>`;
   const _fbCamp = fbGetCampaignStatus(), _fbAdset = fbGetAdsetStatus(), _fbCreo = fbGetCreoStatus();
 
@@ -6631,6 +6633,7 @@ async function startFBSync(mode = 'full') {
 
     const CLOSED = [101];
     const allRows = [];
+    const accErrors = [];   // справжні відповіді FB по кабінетах, що впали
 
     // ── Step 1: collect all unique accounts across all tokens ─
     // Each account is fetched only once (by the first token that has access to it)
@@ -6709,9 +6712,14 @@ async function startFBSync(mode = 'full') {
       setFBProgress(pct);
       setFBStatus(`[${i+1}/${accountQueue.length}] ${acc.name || acc.id}...`, 'var(--muted)');
       try {
-        const rows = await fbFetchInsights(acc.id, timeRange, token);
+        const rows = await fbFetchInsights(acc.id, timeRange, token, (c, all) => {
+          if (all > 1) setFBStatus(`[${i+1}/${accountQueue.length}] ${acc.name || acc.id}: вікно ${c}/${all}…`, 'var(--muted)');
+        });
         allRows.push(...rows);
       } catch(e) {
+        // Причину зберігаємо: раніше вона лишалась тільки в console.warn, і коли падали
+        // ВСІ кабінети, на екран ішло «Перевір токен», хоча токен був ні при чому.
+        accErrors.push(`${acc.name || acc.id}: ${e.message}`);
         console.warn(`FB sync: кабінет ${acc.id} пропущено:`, e.message);
       }
     }
@@ -6725,7 +6733,12 @@ async function startFBSync(mode = 'full') {
     setFBStatus('Зберігаю дані...', 'var(--muted)');
 
     // Для повного оновлення порожній результат — це помилка; для «за 2 дні» — може просто не бути витрат.
-    if (!allRows.length && mode !== 'recent') throw new Error('Даних по витратах не знайдено. Перевір токен та права ads_read');
+    if (!allRows.length && mode !== 'recent') {
+      throw new Error(accErrors.length
+        ? 'FB не віддав витрати:\n• ' + accErrors.slice(0, 3).join('\n• ')
+          + (accErrors.length > 3 ? `\n…і ще ${accErrors.length - 3}` : '')
+        : 'Даних по витратах не знайдено. Перевір токен та права ads_read');
+    }
 
     // ── Step 4: save to SPEND_FILES ─────────────────────────
     const today = until.slice(8)+'.'+until.slice(5,7)+'.'+until.slice(0,4);
@@ -6779,12 +6792,35 @@ async function fbFetch(path) {
 
 /** Fetch active campaigns + adsets from FB and filter dropdowns */
 /** Fetch all pages of ad-level daily insights for one account */
-async function fbFetchInsights(accountId, timeRange, token) {
+// Скільки днів тягнути одним запитом. FB на «рік × level=ad × time_increment=1»
+// відповідає помилкою «Please reduce the amount of data you're asking for», і тоді
+// повне оновлення не давало НІ ОДНОГО рядка: кожен кабінет падав у catch, а на екран
+// ішло «Даних по витратах не знайдено. Перевір токен та права ads_read» — хоча токен
+// робочий (живцем 03.11.2026: «за 2 дні» і «3 місяці» працювали, повне — ні).
+const INSIGHTS_CHUNK_DAYS = 30;
+
+/** Вікна по CHUNK днів від since до until включно: [['2026-01-01','2026-01-30'], …]. */
+function dateChunks(since, until, days) {
+  const out = [];
+  const end = new Date(until + 'T00:00:00');
+  let cur = new Date(since + 'T00:00:00');
+  const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  while (cur <= end) {
+    const stop = new Date(cur);
+    stop.setDate(stop.getDate() + days - 1);
+    out.push([ymd(cur), ymd(stop < end ? stop : end)]);
+    cur = new Date(stop);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+/** Один запит на одне вікно. Повертає рядки витрат; помилку FB віддає як є. */
+async function fbInsightsWindow(cleanId, since, until, token) {
   const fields = 'campaign_name,adset_name,ad_name,spend';
-  // accountId из /me/adaccounts уже содержит префикс act_ (напр. act_123456)
-  const cleanId = accountId.startsWith('act_') ? accountId : `act_${accountId}`;
-  // level=ad → отримуємо дані на рівні кожного оголошення, включно з ad_name
-  let url = `${FB_API}/${cleanId}/insights?fields=${fields}&level=ad&time_increment=1&time_range=${encodeURIComponent(timeRange)}&limit=500&access_token=${token}`;
+  const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
+  // level=ad → дані на рівні кожного оголошення, включно з ad_name
+  let url = `${FB_API}/${cleanId}/insights?fields=${fields}&level=ad&time_increment=1&time_range=${timeRange}&limit=500&access_token=${token}`;
   const rows = [];
   let pages = 0;
   while (url && pages < 20) { // safety cap at 20 pages
@@ -6803,6 +6839,20 @@ async function fbFetchInsights(accountId, timeRange, token) {
     }
     url = data.paging?.next || null;
     pages++;
+  }
+  if (pages >= 20 && url) console.warn(`FB insights: ${cleanId} ${since}–${until} — стеля 20 сторінок, частина рядків не прийшла`);
+  return rows;
+}
+
+async function fbFetchInsights(accountId, timeRange, token, onChunk) {
+  // accountId из /me/adaccounts уже содержит префикс act_ (напр. act_123456)
+  const cleanId = accountId.startsWith('act_') ? accountId : `act_${accountId}`;
+  const { since, until } = JSON.parse(timeRange);
+  const chunks = dateChunks(since, until, INSIGHTS_CHUNK_DAYS);
+  const rows = [];
+  for (let i = 0; i < chunks.length; i++) {
+    if (onChunk) onChunk(i + 1, chunks.length);
+    rows.push(...await fbInsightsWindow(cleanId, chunks[i][0], chunks[i][1], token));
   }
   return rows;
 }
