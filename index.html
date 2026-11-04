@@ -1425,7 +1425,10 @@ const STATE_METRICS = [
 let _stateCols = {unproc:true, noanswer:true, work:true};
 // Розрізи, де станів немає за визначенням: локацію заповнюють уже на квалификації,
 // тож у таблиці областей ці колонки й кнопки нічого не показують (Артем, 26.09.2026).
-const NO_STATE_DIMS = new Set(['regions']);
+// Розрізи, де трьох станів не буває за визначенням: у «Програних» усі заявки вже
+// закриті, тому колонки стояли б нулями. Області звідси пішли 04.11.2026 — там стани
+// тепер справжні, бо «Без кат.» рахується через normCat.
+const NO_STATE_DIMS = new Set(['lost']);
 
 // ─── UI State persistence ───────────────────────────────
 const UI_STATE_KEY = 'dashUIState_v2';
@@ -1751,10 +1754,11 @@ function normCat(c, status, id) {
   if (c) return c;
   if (status !== 'active') return 'none';
   const st = id != null ? STATE_STORE[String(id)] : null;
-  // Робот ще не бачив заявку (свіжа, або в нього вона 'out') — це «Без категорії»,
-  // а не «Не оброблена». Доти fallback був 'unproc', і будь-яка пауза робота надувала
-  // «Не оброблені»: 29.10.2026 це дало б 7 замість 3 за один день.
-  return (st === 'unproc' || st === 'noanswer' || st === 'work') ? st : 'none';
+  // Чого робот не сказав — «Не оброблена». Повернуто за рішенням Артема (04.11.2026):
+  // так працював дашборд до 29.10. Ціна рішення: пауза робота або непідключена
+  // ⚙ стани надуває метрику — усі активні без категорії стають необробленими
+  // (живцем 19.06.2026 це 56 заявок при 52 реально на «Нових лідах»).
+  return (st === 'noanswer' || st === 'work') ? st : 'unproc';
 }
 
 function parseDate(s) {
@@ -2070,12 +2074,12 @@ function renderKPIs(d) {
   const cC=d.filter(r=>r.category==='C').length;
   // Три стани замість одного: активна заявка без категорії — «Не оброблені» /
   // «Недодзвон» / «У кваліфікації». Розкладає робот станів; чого він не бачив,
-  // лишається «Без категорії» (див. normCat).
+  // лишається «Не оброблені» (див. normCat).
   const cUnproc=d.filter(r=>normCat(r.category,r.status,r.id)==='unproc').length;
   const cNoans =d.filter(r=>normCat(r.category,r.status,r.id)==='noanswer').length;
   const cWork  =d.filter(r=>normCat(r.category,r.status,r.id)==='work').length;
-  // Через normCat, а не через `!category && lost`: інакше активна заявка, якої робот
-  // ще не знає, не падала б ні в одну плитку і перший ряд перестав би давати «Всього».
+  // Через normCat, а не через `!category && lost`: так плитки лишаються розбиттям —
+  // кожна заявка рахується рівно раз і категорії зі станами дають «Всього».
   const cNone=d.filter(r=>normCat(r.category,r.status,r.id)==='none').length;
   const cAct=d.filter(r=>r.status==='active').length, cLost=d.filter(r=>r.status==='lost').length;
   // Оплати навмисно НЕ тут: закріплений рядок — про якість лідів, а оплати живуть у вкладці «💰 Оплати».
@@ -2143,15 +2147,15 @@ function renderRegions(d) {
     const g = String(r.region || '').trim() && geoRegion(r.region);
     if (g) wonMap[g] = (wonMap[g] || 0) + 1;
   });
-  // Станів у цій таблиці немає, тому все без категорії зводимо в «Без кат.» — і активні,
-  // і програні. Через normCat активна заявка без категорії ставала «Не оброблені», колонка
-  // якої тут схована: заявка входила у «Всього», але не в жодну видиму колонку, і сума
-  // колонок не сходилася з підсумком (Артем, 28.09.2026).
+  // Через normCat, як і всі інші розрізи: «Без кат.» означає рівно те саме, що в
+  // закріпленій плитці — програна заявка, якій категорію так і не поставили (Артем,
+  // 04.11.2026). Доти тут було власне правило «усе без категорії», і колонка «Без кат.»
+  // виходила більшою за «З них програні» — областям додавалися ще й активні.
   const map = {};
   rows.forEach(r => {
     const k = r._reg || 'Не вказано';
     if (!map[k]) map[k] = {A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0,dup:0};
-    map[k][r.category === 'A' || r.category === 'B' || r.category === 'C' ? r.category : 'none']++;
+    map[k][normCat(r.category, r.status, r.id)]++;
     if (isDup(r)) map[k].dup++;
   });
   renderDimTable('tbl-regions', 'regions', map, spendMap, aMap,
@@ -2184,11 +2188,11 @@ function regToggle(key) {
 function regSetDepth(v) { _regDepth = v; renderRegions(filterData()); }
 function regSetSort(v)  { _regSort = v; renderRegions(filterData()); }
 
-/** Згортає набір заявок у {n, A, B, C, none, dup}. */
+/** Згортає набір заявок у {n, A, B, C, none, unproc, noanswer, work, dup}. */
 function regAgg(list) {
-  const v = {n: list.length, A: 0, B: 0, C: 0, none: 0, dup: 0};
+  const v = {n: list.length, A: 0, B: 0, C: 0, none: 0, unproc: 0, noanswer: 0, work: 0, dup: 0};
   list.forEach(r => {
-    v[r.category === 'A' || r.category === 'B' || r.category === 'C' ? r.category : 'none']++;
+    v[normCat(r.category, r.status, r.id)]++;
     if (isDup(r)) v.dup++;
   });
   return v;
@@ -2241,10 +2245,11 @@ function renderRegionSources(rows) {
   };
 
   let h = '<div class="tbl-wrap"><table style="border-collapse:collapse;width:100%;font-size:11px"><thead><tr>'
-    + ['Область / кампанія / адсет','Заявок','A','B','C','Без кат.','% A']
+    + ['Область / кампанія / адсет','Заявок','A','B','C','Не обр.','Недодзв.','У квал.','Без кат.','% A']
       .map((t,i) => `<th style="cursor:default;text-align:${i?'right':'left'}">${t}</th>`).join('')
     + '</tr></thead><tbody>';
-  const row = (lbl, v, bg) => `<tr style="${bg}">${lbl}${num(v.n)}${cell(v.A,v.n)}${cell(v.B,v.n)}${cell(v.C,v.n)}${cell(v.none,v.n)}${paCell(v)}</tr>`;
+  // Три стани тут видимі, а не сховані кнопками: інакше A+B+C+«Без кат.» не дає «Заявок».
+  const row = (lbl, v, bg) => `<tr style="${bg}">${lbl}${num(v.n)}${cell(v.A,v.n)}${cell(v.B,v.n)}${cell(v.C,v.n)}${cell(v.unproc,v.n)}${cell(v.noanswer,v.n)}${cell(v.work,v.n)}${cell(v.none,v.n)}${paCell(v)}</tr>`;
 
   regions.forEach(R => {
     const open = _regOpen.has(R.name);
@@ -2551,9 +2556,9 @@ function renderManagers(d) {
       const mgr = r.manager || 'Не вказано';
       if (!mx[pk]) mx[pk] = {};
       if (!mx[pk][mgr]) mx[pk][mgr] = {n:0,A:0,B:0,C:0,none:0};
-      // Графік менеджерів показує лише A/B/C — усі три стани «без категорії» йдуть одним стовпцем.
+      // Графік малює лише «Ліди/A/B/C» (METRIC_DEFS), решта кошиків тут про запас.
       const _c = normCat(r.category, r.status, r.id);
-      mx[pk][mgr][(_c === 'unproc' || _c === 'noanswer' || _c === 'work') ? 'none' : _c]++;
+      mx[pk][mgr][_c] = (mx[pk][mgr][_c] || 0) + 1;
       mx[pk][mgr].n++;
     });
 
