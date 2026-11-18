@@ -2870,23 +2870,56 @@ async function landSyncVisits() {
   }
 }
 
-// Витрати по ленду в розрізі періодів. Ключ матчингу — campaign_id, а не назва:
-// назву FB віддає поточну, а при перейменуванні кампанії id лишається тим самим.
-// Рядки витрат без campaign_id (старі ручні файли) у розподіл не йдуть.
+// Ленд по адсету — друге джерело розкладки, коли лог заходів по цьому дню й
+// кампанії нічого не дає. Адсет один-до-одного з лендом, бо в об'яві адсета стоїть
+// один набір посилань: замір по rows.json (авг–ноя 2026) — ключів «кампанія||адсет»
+// 169, однозначних 96 (2 406 лідів), неоднозначний 1 (вироджений, кампанія й адсет
+// «Не вказано»). Він і три неоднозначні адсети грошей не отримують: ділити їх
+// пропорційно лідам — це вигадати число, а не порахувати.
+// Другий ключ — самий адсет (73 однозначних із 111): CRM часто кладе в «Кампанію»
+// назву адсета, і тоді складений ключ не сходиться.
+function buildLandByAdset() {
+  const nk = s => (s || '').trim().toLowerCase();
+  const byPair = {}, byAdset = {};
+  DATA.forEach(r => {
+    const land = (r.ad_funnel || '').trim();
+    if (!land || land === 'Не вказано' || land === LAND_NONE) return;
+    const a = nk(r.adset);
+    if (!a) return;
+    const pair = nk(r.campaign) + '||' + a;
+    (byPair[pair]  = byPair[pair]  || {})[land] = 1;
+    (byAdset[a]    = byAdset[a]    || {})[land] = 1;
+  });
+  const only = m => { const o = {}; Object.keys(m).forEach(k => {
+    const v = Object.keys(m[k]); if (v.length === 1) o[k] = v[0]; }); return o; };
+  return { pair: only(byPair), adset: only(byAdset) };
+}
+
+// Витрати по ленду в розрізі періодів. Перше джерело — лог заходів розподільника:
+// ключ матчингу campaign_id, а не назва (назву FB віддає поточну, id не їде при
+// перейменуванні). Друге — карта «адсет → ленд» із самих заявок CRM; вона бере
+// рядки витрат, по яких лог нічого не дав: без campaign_id (старі ручні файли,
+// і живий лог станом на 18.11.2026 — 7 рядків, 12 заходів, campaign_id порожній
+// у всіх) або з ключем ленда, якого немає серед воронок CRM.
 // pkOf(isoДата) → ключ періоду; один прохід по витратах на всі періоди.
 function buildLandSpendByPeriod(pkOf,
                                 fromISO = document.getElementById('f-from').value,
                                 toISO   = document.getElementById('f-to').value) {
+  const nk = s => (s || '').trim().toLowerCase();
   const vis = getLandVisits();
   const visKeys = Object.keys(vis);
-  if (!visKeys.length) return {};
   const key2name = {};
   getLandCfg().forEach(x => { key2name[x.key.toLowerCase()] = x.name; });
+  // Воронки, які реально є в заявках: ленд із логу, якого тут немає, рядка в
+  // таблиці не має — гроші на нього пішли б у нікуди, тому такий день лишаємо
+  // адсетній карті.
+  const known = new Set();
+  DATA.forEach(r => { const v = (r.ad_funnel || '').trim(); if (v) known.add(v.toLowerCase()); });
+  const rows = getSpendData().filter(s =>
+    !(fromISO && s.date < fromISO) && !(toISO && s.date > toISO));
   const campDay = {};
-  getSpendData().forEach(s => {
+  rows.forEach(s => {
     if (!s.campaign_id) return;
-    if (fromISO && s.date < fromISO) return;
-    if (toISO   && s.date > toISO)   return;
     const k = s.date + '|' + s.campaign_id;
     campDay[k] = (campDay[k] || 0) + s.spend;
   });
@@ -2894,17 +2927,34 @@ function buildLandSpendByPeriod(pkOf,
   // split('|'): ключ ленда приходить з розподільника і «|» в ньому не заборонений.
   const parts = k => { const i = k.indexOf('|'), j = k.indexOf('|', i + 1);
                        return [k.slice(0, j), k.slice(j + 1), k.slice(0, i)]; };
-  const visDay = {};
-  visKeys.forEach(k => { const dk = parts(k)[0]; visDay[dk] = (visDay[dk] || 0) + vis[k]; });
+  const visDay = {}, covered = new Set();
+  visKeys.forEach(k => {
+    const [dk, land] = parts(k);
+    if (!known.has(nk(key2name[land.toLowerCase()] || land))) return;
+    visDay[dk] = (visDay[dk] || 0) + vis[k];
+    covered.add(dk);
+  });
   const out = {};
+  const add = (day, land, sp) => {
+    const p = pkOf(day);
+    if (!out[p]) out[p] = {};
+    out[p][nk(land)] = (out[p][nk(land)] || 0) + sp;
+  };
   visKeys.forEach(k => {
     const [dk, land, day] = parts(k);
     const tot = visDay[dk] || 0, sp = campDay[dk] || 0;
     if (!tot || !sp) return;
-    const p = pkOf(day);
-    const nkn = (key2name[land.toLowerCase()] || land).trim().toLowerCase();
-    if (!out[p]) out[p] = {};
-    out[p][nkn] = (out[p][nkn] || 0) + sp * vis[k] / tot;
+    const nkn = nk(key2name[land.toLowerCase()] || land);
+    if (!known.has(nkn)) return;
+    add(day, nkn, sp * vis[k] / tot);
+  });
+  const byAdset = buildLandByAdset();
+  rows.forEach(s => {
+    if (s.campaign_id && covered.has(s.date + '|' + s.campaign_id)) return;
+    const a = nk(s.adset);
+    if (!a) return;
+    const land = byAdset.pair[nk(s.campaign) + '||' + a] || byAdset.adset[a];
+    if (land) add(s.date, land, s.spend);
   });
   return out;
 }
