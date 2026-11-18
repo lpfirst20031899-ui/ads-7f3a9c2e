@@ -96,6 +96,11 @@ input[type=date]:focus{border-color:var(--accent)}
 
 /* ─── Sortable table ─── */
 .tbl-wrap{overflow:auto;border-radius:8px;border:1px solid var(--border)}
+/* Грид-елемент за замовчуванням не вужчий за свій min-content, тому картка з
+   широкою таблицею розтягувала сторінку: прокрутка вправо везла весь дашборд,
+   а таблиця стояла. Замір (Ленди, 28 колонок, вікно 1280 px): сторінка
+   2409 px → 1280 px, .tbl-wrap листається сам. Сторож — check_lands_ui.py. */
+.g1>*,.g2>*{min-width:0}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{background:var(--surface2);color:var(--muted);font-weight:500;padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;position:sticky;top:0}
 th:hover{color:var(--text)}
@@ -476,19 +481,6 @@ tr:hover td{background:var(--surface2)}
 </div>
 
 
-<!-- Налаштування лендів -->
-<div id="land-modal" onclick="if(event.target===this)landCfgClose()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;align-items:center;justify-content:center">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(880px,94vw);max-height:88vh;overflow:auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-      <div class="cc-title" style="margin:0">Налаштування лендів</div>
-      <button onclick="landCfgClose()" title="Закрити"
-        style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 9px;font-size:13px;cursor:pointer">✕</button>
-    </div>
-    <div class="cc-sub">Зліва — ключ ленда рівно так, як його шле розподільник (не посилання на сайт). Справа — назва у CRM «Воронка». Без пари витрати на ленд не лягають.</div>
-    <div id="land-modal-body"></div>
-  </div>
-</div>
-
 <!-- Upload overlay -->
 <div id="upload-overlay">
   <div class="upload-modal">
@@ -663,8 +655,6 @@ tr:hover td{background:var(--surface2)}
       <button class="vt-btn" onclick="setView('lands','chart',this)">📊 Графік</button>
       <button class="vt-btn active" onclick="setView('lands','table',this)">☰ Список</button>
     </div>
-    <button id="land-cfg-btn" onclick="landCfgOpen()" title="Налаштування лендів: посилання ↔ назва у CRM «Воронка»"
-      style="background:var(--surface3);border:1px solid var(--border);color:var(--muted);padding:6px 9px;border-radius:6px;font-size:12px;cursor:pointer">⚙ Ленди</button>
   </div>
   <div id="v-lands-chart" style="display:none">
     <div class="g1"><div class="cc">
@@ -2795,7 +2785,6 @@ function renderLands(d) {
   const aMap = {};
   d.forEach(r => { if (r.category==='A') { const k = r.ad_funnel || LAND_NONE; aMap[k]=(aMap[k]||0)+1; } });
   const w = last7();
-  landCfgBadge(d);
   renderPeriodDim(d, {
     fld:'ad_funnel', view:tabView.lands, stateKey:'lands', st:'_lnd', emptyLabel:LAND_NONE,
     ids:{canvas:'c-land-dynamic', toggles:'land-chart-toggles', gran:'land-gran-btns',
@@ -2820,8 +2809,8 @@ const DEFAULT_LAND_STATS_URL = 'https://go.green-partners.com.ua/stats';
 function getLandCfgRaw() { return localStorage.getItem(LAND_CFG_KEY) || ''; }
 
 // Один рядок — один ленд: «Назва у CRM = ключ у лозі заходів». Ключ не вказано —
-// він дорівнює назві. Другого списку лендів у дашборді немає: усе, чого тут
-// немає, показується як неопізнане, а не підмішується молча.
+// він дорівнює назві. Набір лежить у localStorage (`lands_cfg_v1`) і екрана
+// налаштувань не має: пари правляться там, де їх видно — у розподільнику.
 function getLandCfg() {
   const out = [];
   getLandCfgRaw().split('\n').forEach(ln => {
@@ -2833,79 +2822,6 @@ function getLandCfg() {
     if (name) out.push({ name, key: key || name });
   });
   return out;
-}
-
-// Ленди, які приходять із CRM, але в налаштуваннях їх немає.
-function landUnknown(d) {
-  const known = new Set(getLandCfg().map(x => x.name.toLowerCase()));
-  const seen = new Map();
-  d.forEach(r => {
-    const v = (r.ad_funnel || '').trim();
-    if (!v || v === 'Не вказано' || known.has(v.toLowerCase())) return;
-    seen.set(v, (seen.get(v) || 0) + 1);
-  });
-  return [...seen.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-// Лічильник неопізнаних — на самій кнопці. Окремої картки над таблицею немає:
-// розділ цілком живе в попапі.
-function landCfgBadge(d) {
-  const btn = document.getElementById('land-cfg-btn');
-  if (!btn) return;
-  const u = landUnknown(d).length;
-  btn.innerHTML = '⚙ Ленди' + (u ? ` <span style="background:var(--c);color:#0a0e1a;border-radius:8px;padding:0 5px;font-size:10px;font-weight:700">${u}</span>` : '');
-  btn.title = u ? `${u} ленд(ів) із CRM без пари в налаштуваннях — витрати по них не рахуються`
-                : 'Налаштування лендів: посилання ↔ назва у CRM «Воронка»';
-}
-
-function landCfgOpen()  { document.getElementById('land-modal').style.display = 'flex'; landCfgRender(); }
-function landCfgClose() { document.getElementById('land-modal').style.display = 'none'; }
-
-const LAND_ROW_INP = 'width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 9px;border-radius:6px;font-size:12px;outline:none';
-
-// Обидва поля — звичайний ввід. Випадайки тут не треба: ключ ленда Артем
-// переписує з розподільника, назву — з картки CRM.
-function landCfgRowHtml(key = '', name = '') {
-  return `<tr>
-    <td style="padding:4px 6px 4px 0"><input class="land-key" value="${escHtml(key)}" placeholder="green-partners-landing" style="${LAND_ROW_INP}"></td>
-    <td style="padding:4px 0"><input class="land-name" value="${escHtml(name)}" placeholder="СЕС - Green Partners" style="${LAND_ROW_INP}"></td>
-    <td style="padding:4px 0 4px 6px"><button onclick="this.closest('tr').remove()" title="Прибрати рядок"
-      style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 8px;font-size:12px;cursor:pointer">✕</button></td>
-  </tr>`;
-}
-
-function landCfgRender() {
-  const body = document.getElementById('land-modal-body');
-  if (!body) return;
-  const cfg = getLandCfg();
-  const rows = (cfg.length ? cfg : [{key:'', name:''}]).map(x => landCfgRowHtml(x.key, x.name)).join('');
-  const unknown = landUnknown(DATA);
-  const th = 'text-align:left;padding:0 6px 6px 0;color:var(--muted);font-size:11px;font-weight:500';
-  body.innerHTML = `
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr><th style="${th}">Ключ ленда в розподільнику</th><th style="${th};padding-left:0">Назва у CRM «Воронка»</th><th></th></tr></thead>
-      <tbody id="land-rows">${rows}</tbody>
-    </table>
-    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button class="vt-btn" onclick="document.getElementById('land-rows').insertAdjacentHTML('beforeend', landCfgRowHtml())">+ Додати ленд</button>
-      <button class="vt-btn" onclick="landCfgSave()" style="background:var(--accent);color:#0a0e1a;font-weight:700">Зберегти</button>
-    </div>
-    ${unknown.length ? `<div style="margin-top:12px;font-size:12px;color:var(--c)">⚠️ У CRM є ленди без пари (${unknown.length}): `
-        + unknown.map(([n, c]) => `${escHtml(n)} <span style="color:var(--muted)">· ${c}</span>`).join(', ')
-        + `</div>` : ''}`;
-}
-
-function landCfgSave() {
-  const lines = [];
-  document.querySelectorAll('#land-rows tr').forEach(tr => {
-    const key  = (tr.querySelector('.land-key')?.value  || '').trim();
-    const name = (tr.querySelector('.land-name')?.value || '').trim();
-    if (!name) return;
-    lines.push(key && key !== name ? `${name} = ${key}` : name);
-  });
-  try { localStorage.setItem(LAND_CFG_KEY, lines.join('\n')); } catch(e) {}
-  landCfgClose();
-  render();
 }
 
 function getLandVisits() {
