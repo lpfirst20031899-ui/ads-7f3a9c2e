@@ -6293,9 +6293,10 @@ async function _wakeServer(proxyUrl, maxSec) {
 // true/'full' — усе з 1 січня. Клієнт у будь-якому разі мерджить прийдешнє по id,
 // тому ширше вікно лише довше йде, нічого не ламаючи.
 async function startCRMSync(mode) {
-  const syncParam = (mode === true || mode === 'full') ? '?mode=full'
-                  : mode === '3m'                      ? '?mode=inc&days=90'
-                  :                                      '?mode=inc';
+  const isFullSync = (mode === true || mode === 'full');
+  const syncParam = isFullSync      ? '?mode=full'
+                  : mode === '3m'   ? '?mode=inc&days=90'
+                  :                   '?mode=inc';
 
   SYNC_BTN_IDS.forEach(id => {
     const b = document.getElementById(id); if (b) b.disabled = true;
@@ -6405,6 +6406,28 @@ async function startCRMSync(mode) {
         newActive.forEach(r => { if (r.id) { _ma[r.id] = r; delete _ml[r.id]; } });
         newLost.forEach(r =>   { if (r.id) { _ml[r.id] = r; delete _ma[r.id]; } });
         newWon.forEach(r =>    { if (r.id) _mw[r.id] = r; });
+        // Видалену в CRM угоду мердж по id сам не прибирає — вона жила в localStorage
+        // вічно (так у статистику лізли видалені тестові заявки). Потрібні заявки Артем
+        // не видаляє, а переводить у статус або в програні, тому все, чого в відповіді
+        // немає, видалено. Але питати це можна лише там, де відповідь ПОВНА: проксі
+        // надсилає межу вікна в `since` (повне оновлення — '2026-01-01', інкремент —
+        // перший день свого вікна). Заявка з датою в межах вікна інакше не буває:
+        // її `updated_at` не менший за дату заявки, значить вона в відповіді є.
+        // Старіше `since` не чистимо — живу угоду, якої три місяці не торкались,
+        // інкремент не повертає, і чистка знесла б історію.
+        let _gone = 0;
+        // Проксі без `since` (ще не задеплоєний) — лишаємо йому старе правило:
+        // повне оновлення чистить усе 2026+, інкремент не чистить нічого.
+        const _since = String(msg.since || (isFullSync ? '2026-01-01' : ''));
+        if (_since) {
+          const seen = new Set();
+          [newActive, newLost, newWon].forEach(a => a.forEach(r => { if (r.id) seen.add(String(r.id)); }));
+          const _iso = r => { const p = String((r && r.date) || '').split(' ')[0].split('.');
+                              return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : ''; };
+          [_ma, _ml, _mw].forEach(m => Object.keys(m).forEach(id => {
+            if (!seen.has(String(id)) && _iso(m[id]) >= _since) { delete m[id]; _gone++; }
+          }));
+        }
         activeFileData.length = 0; lostFileData.length = 0; wonFileData.length = 0;
         Object.values(_ma).forEach(r => activeFileData.push(r));
         Object.values(_ml).forEach(r => lostFileData.push(r));
@@ -6423,7 +6446,8 @@ async function startCRMSync(mode) {
         updateLastSyncDisplay();
 
         const wonCnt = wonFileData.length;
-        const label = '✓ ' + total + ' угод' + (wonCnt ? ' · ' + wonCnt + ' оплат' : '');
+        const label = '✓ ' + total + ' угод' + (wonCnt ? ' · ' + wonCnt + ' оплат' : '')
+                    + (_gone ? ' · знято ' + _gone + ' видалених' : '');
         setCRMStatus(label, 'var(--a)');
         setCRMProgress(100);
         setTimeout(() => setCRMProgress(-1), 2000);
