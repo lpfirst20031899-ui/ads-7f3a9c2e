@@ -475,7 +475,21 @@ tr:hover td{background:var(--surface2)}
   </div>
 </div>
 
-<!-- Upload overlay --><!-- Upload overlay -->
+
+<!-- Налаштування лендів -->
+<div id="land-modal" onclick="if(event.target===this)landCfgClose()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(880px,94vw);max-height:88vh;overflow:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div class="cc-title" style="margin:0">Налаштування лендів</div>
+      <button onclick="landCfgClose()" title="Закрити"
+        style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 9px;font-size:13px;cursor:pointer">✕</button>
+    </div>
+    <div class="cc-sub">Зліва — ключ ленда рівно так, як його шле розподільник (не посилання на сайт). Справа — назва у CRM «Воронка». Без пари витрати на ленд не лягають.</div>
+    <div id="land-modal-body"></div>
+  </div>
+</div>
+
+<!-- Upload overlay -->
 <div id="upload-overlay">
   <div class="upload-modal">
     <div style="font-size:32px;margin-bottom:12px">⚙️</div>
@@ -532,6 +546,7 @@ tr:hover td{background:var(--surface2)}
     <div class="tab" data-tab="adsets">Адсети</div>
     <div class="tab" data-tab="creos">Крео</div>
     <div class="tab" data-tab="managers">Менеджери</div>
+    <div class="tab" data-tab="lands">Ленди</div>
     <div class="tab" data-tab="regions">Регіони</div>
     <div class="tab" data-tab="lost">Програні</div>
     <div class="tab" data-tab="won">💰 Оплати</div>
@@ -638,6 +653,37 @@ tr:hover td{background:var(--surface2)}
       <div id="tbl-managers"></div>
       <div id="mgr-time-wrap"></div>
     </div>
+  </div>
+</div>
+
+<!-- LANDS -->
+<div id="tc-lands" class="tc">
+  <div class="tab-toolbar">
+    <div class="view-toggle" id="vt-lands">
+      <button class="vt-btn" onclick="setView('lands','chart',this)">📊 Графік</button>
+      <button class="vt-btn active" onclick="setView('lands','table',this)">☰ Список</button>
+    </div>
+    <button id="land-cfg-btn" onclick="landCfgOpen()" title="Налаштування лендів: посилання ↔ назва у CRM «Воронка»"
+      style="background:var(--surface3);border:1px solid var(--border);color:var(--muted);padding:6px 9px;border-radius:6px;font-size:12px;cursor:pointer">⚙ Ленди</button>
+  </div>
+  <div id="v-lands-chart" style="display:none">
+    <div class="g1"><div class="cc">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <div class="cc-title" style="margin:0">Ленди — динаміка</div>
+        <div id="land-chart-toggles" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      </div>
+      <div style="height:360px"><canvas id="c-land-dynamic"></canvas></div>
+    </div></div>
+  </div>
+  <div id="v-lands-table">
+    <div class="g1"><div class="cc">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+        <div><div class="cc-title" style="margin:0">Ленди — детальна таблиця</div><div class="cc-sub" style="margin-top:2px">Клікай по заголовку для сортування</div></div>
+        <div id="land-gran-btns"></div>
+      </div>
+      <div id="tbl-lands"></div>
+      <div id="land-time-wrap"></div>
+    </div></div>
   </div>
 </div>
 
@@ -1399,7 +1445,7 @@ Chart.defaults.plugins.tooltip.bodyColor='#9ba5c5';
 
 // ─── State ─────────────────────────────────────────────
 let activeTab = 'overview';
-const tabView = {campaigns:'table',adsets:'table',creos:'table',managers:'table',lost:'chart',won:'chart'};
+const tabView = {campaigns:'table',adsets:'table',creos:'table',managers:'table',lands:'table',lost:'chart',won:'chart'};
 const registry = {};
 
 // sort state per table
@@ -2058,6 +2104,7 @@ function renderByTab(d, tab) {
     case 'adsets':    renderAdsets(d);    break;
     case 'creos':     renderCreos(d);     break;
     case 'managers':  renderManagers(d);  break;
+    case 'lands':     renderLands(d);     break;
     case 'regions':   renderRegions(d);   break;
     case 'lost':      renderLost(d);      break;
     case 'won':       renderWon(filterWon());break;
@@ -2542,12 +2589,20 @@ function renderCreos(d) {
   }
 }
 
-function renderManagers(d) {
-  if (tabView.managers==='chart') {
+// Загальний каркас вкладки «розріз × період»: Менеджери і Ленди. Поля різні,
+// розмітка й логіка однакові, тому живуть в одному місці.
+// cfg.emptyLabel — як підписати порожнє поле у стовпцях: у Менеджерах таких
+// стовпців немає (порожнє відкидається), у Лендах це «Без ленда».
+// cfg.table — замикання на renderDimTable: Ленди докидають витрати, Менеджери ні.
+function renderPeriodDim(d, cfg) {
+  const fld = cfg.fld, ids = cfg.ids, st = cfg.st;
+  const kf = r => r[fld] || cfg.emptyLabel || 'Не вказано';
+  const keys = [...new Set(d.map(r => r[fld] || cfg.emptyLabel).filter(Boolean))].sort();
+
+  if (cfg.view === 'chart') {
     // ── Dynamic line chart (like По днях) ──
-    const gran = window._mgrChartGran || 'week';
-    const metric = window._mgrChartMetric || 'leads';
-    const mgrs = [...new Set(d.map(r=>r.manager).filter(Boolean))].sort();
+    const gran = window[st+'ChartGran'] || 'week';
+    const metric = window[st+'ChartMetric'] || 'leads';
 
     function weekKeyM(iso) {
       const dt=new Date(iso+'T00:00:00'), dow=(dt.getDay()+6)%7;
@@ -2555,13 +2610,13 @@ function renderManagers(d) {
       return mon.getFullYear()+'-'+String(mon.getMonth()+1).padStart(2,'0')+'-'+String(mon.getDate()).padStart(2,'0');
     }
 
-    // aggregate per manager per period
+    // aggregate per key per period
     const mx = {};
     d.forEach(r => {
       const dt = parseDate(r.date); if (!dt) return;
       const iso = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
       const pk = gran==='day' ? iso : gran==='week' ? weekKeyM(iso) : iso.slice(0,7);
-      const mgr = r.manager || 'Не вказано';
+      const mgr = kf(r);
       if (!mx[pk]) mx[pk] = {};
       if (!mx[pk][mgr]) mx[pk][mgr] = {n:0,A:0,B:0,C:0,none:0};
       // Графік малює лише «Ліди/A/B/C» (METRIC_DEFS), решта кошиків тут про запас.
@@ -2586,7 +2641,7 @@ function renderManagers(d) {
     ];
     const COLORS_M = ['#60a5fa','#4ade80','#a78bfa','#fb923c','#f472b6','#34d399','#fbbf24','#e879f9'];
     const mk = METRIC_DEFS.find(m=>m.id===metric)?.key || 'n';
-    const datasets = mgrs.map((mgr,i) => ({
+    const datasets = keys.map((mgr,i) => ({
       label: mgr,
       data: xKeys.map(pk => mx[pk]?.[mgr]?.[mk] || 0),
       borderColor: COLORS_M[i%COLORS_M.length],
@@ -2594,9 +2649,9 @@ function renderManagers(d) {
       borderWidth: 2, pointRadius: xKeys.length>60?0:3, tension: 0.3, fill: false,
     }));
 
-    const ctx = freshCanvas('c-mgr-dynamic');
+    const ctx = freshCanvas(ids.canvas);
     if (ctx) {
-      reg('c-mgr-dynamic', new Chart(ctx, {
+      reg(ids.canvas, new Chart(ctx, {
         type:'line',
         data: {labels: xLabels, datasets},
         options: {
@@ -2613,13 +2668,13 @@ function renderManagers(d) {
       }));
     }
 
-    const togglesEl = document.getElementById('mgr-chart-toggles');
+    const togglesEl = document.getElementById(ids.toggles);
     if (togglesEl) {
       const granBtns = [['day','По днях'],['week','По тижнях'],['month','По місяцях']].map(([g,lbl])=>
-        `<button class="vt-btn${gran===g?' active':''}" onclick="window._mgrChartGran='${g}';render()">${lbl}</button>`
+        `<button class="vt-btn${gran===g?' active':''}" onclick="window.${st}ChartGran='${g}';render()">${lbl}</button>`
       ).join('');
       const metricBtns = METRIC_DEFS.map(m =>
-        `<button class="vt-btn${metric===m.id?' active':''}" onclick="window._mgrChartMetric='${m.id}';render()">${m.label}</button>`
+        `<button class="vt-btn${metric===m.id?' active':''}" onclick="window.${st}ChartMetric='${m.id}';render()">${m.label}</button>`
       ).join('');
       togglesEl.innerHTML =
         `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
@@ -2631,33 +2686,34 @@ function renderManagers(d) {
         </div>`;
     }
   } else {
-    const mgrGran = window._mgrTimeGran || 'total';
-    const granBtnsEl = document.getElementById('mgr-gran-btns');
+    const mgrGran = window[st+'TimeGran'] || 'total';
+    const granBtnsEl = document.getElementById(ids.gran);
     if (granBtnsEl) granBtnsEl.innerHTML = `<div class="view-toggle">
-      <button class="vt-btn${mgrGran==='total'?' active':''}" onclick="window._mgrTimeGran='total';render()">Загалом</button>
-      <button class="vt-btn${mgrGran==='week'?' active':''}" onclick="window._mgrTimeGran='week';render()">По тижнях</button>
-      <button class="vt-btn${mgrGran==='month'?' active':''}" onclick="window._mgrTimeGran='month';render()">По місяцях</button>
+      <button class="vt-btn${mgrGran==='total'?' active':''}" onclick="window.${st}TimeGran='total';render()">Загалом</button>
+      <button class="vt-btn${mgrGran==='week'?' active':''}" onclick="window.${st}TimeGran='week';render()">По тижнях</button>
+      <button class="vt-btn${mgrGran==='month'?' active':''}" onclick="window.${st}TimeGran='month';render()">По місяцях</button>
     </div>`;
-    const tblMgr   = document.getElementById('tbl-managers');
-    const timeWrap = document.getElementById('mgr-time-wrap');
+    const tblMgr   = document.getElementById(ids.tbl);
+    const timeWrap = document.getElementById(ids.time);
     if (mgrGran === 'total') {
       if (tblMgr)   tblMgr.style.display = '';
       if (timeWrap) timeWrap.innerHTML = '';
-      renderDimTable('tbl-managers','managers',groupCat(d,'manager'));
+      cfg.table(ids.tbl, cfg.stateKey, cfg.group(d));
     } else {
       if (tblMgr) tblMgr.style.display = 'none';
-      // ── Build manager × period matrix ─────────────────
+      // ── Build key × period matrix ─────────────────────
       const wkKey2 = iso => {
         const dt=new Date(iso+'T00:00:00'), dow=(dt.getDay()+6)%7;
         const mon=new Date(dt.getTime()-dow*86400000);
         return mon.getFullYear()+'-'+String(mon.getMonth()+1).padStart(2,'0')+'-'+String(mon.getDate()).padStart(2,'0');
       };
-      const mgrs = [...new Set(d.map(r=>r.manager).filter(Boolean))].sort();
+      const mgrs = keys;
       const allDates = d.map(r=>{
         const dt=parseDate(r.date); if(!dt) return null;
         return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
       }).filter(Boolean);
       const periods = [...new Set(allDates.map(iso=>mgrGran==='week'?wkKey2(iso):iso.slice(0,7)))].sort();
+      const pkOf = iso => mgrGran==='week' ? wkKey2(iso) : iso.slice(0,7);
       const MN=['Січ','Лют','Бер','Кві','Тра','Чер','Лип','Сер','Вер','Жов','Лис','Гру'];
       const pLbl2=pk=>{
         if(mgrGran==='week'){const dt=new Date(pk+'T00:00:00'),su=new Date(dt.getTime()+6*86400000);return `${String(dt.getDate()).padStart(2,'0')}.${String(dt.getMonth()+1).padStart(2,'0')}–${String(su.getDate()).padStart(2,'0')}.${String(su.getMonth()+1).padStart(2,'0')}`;}
@@ -2669,12 +2725,14 @@ function renderManagers(d) {
         const dt=parseDate(r.date); if(!dt) return;
         const iso=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
         const pk=mgrGran==='week'?wkKey2(iso):iso.slice(0,7);
-        const mgr=r.manager||'Не вказано';
+        const mgr=kf(r);
         if(!mx[pk]) mx[pk]={};
         if(!mx[pk][mgr]) mx[pk][mgr]={n:0,A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};
         mx[pk][mgr][normCat(r.category, r.status, r.id)]++;
         mx[pk][mgr].n++;
       });
+      // Ленди малюють період інакше — таблицею «розріз × періоди», як у «По днях».
+      if (cfg.periodTable) { cfg.periodTable({el:timeWrap, keys:mgrs, periods, pLbl:pLbl2, mx, pkOf}); return; }
       const colTots={}; mgrs.forEach(m=>{colTots[m]={n:0,A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};});
       periods.forEach(p=>{ mgrs.forEach(mgr=>{ const v=mx[p]?.[mgr]; if(v){['n','A','B','C','none','unproc','noanswer','work'].forEach(k=>{colTots[mgr][k]+=(v[k]||0);}); }}); });
       const grandTot={n:0,A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};
@@ -2714,6 +2772,306 @@ function renderManagers(d) {
   }
 }
 
+function renderManagers(d) {
+  renderPeriodDim(d, {
+    fld:'manager', view:tabView.managers, stateKey:'managers', st:'_mgr', emptyLabel:'',
+    ids:{canvas:'c-mgr-dynamic', toggles:'mgr-chart-toggles', gran:'mgr-gran-btns',
+         tbl:'tbl-managers', time:'mgr-time-wrap'},
+    group: rows => groupCat(rows,'manager'),
+    table: (id, sk, map) => renderDimTable(id, sk, map),
+  });
+}
+
+// Порожня «Воронка» — заявка без ленда: чат-бот, Messenger або час до
+// впровадження розподільника. Окремий рядок, інакше сума витрат по таблиці
+// тихо втратила б більше половини грошей.
+function groupLand(rows) {
+  const m = groupCat(rows, 'ad_funnel');
+  if (m['Не вказано']) { m[LAND_NONE] = m['Не вказано']; delete m['Не вказано']; }
+  return m;
+}
+
+function renderLands(d) {
+  const aMap = {};
+  d.forEach(r => { if (r.category==='A') { const k = r.ad_funnel || LAND_NONE; aMap[k]=(aMap[k]||0)+1; } });
+  const w = last7();
+  landCfgBadge(d);
+  renderPeriodDim(d, {
+    fld:'ad_funnel', view:tabView.lands, stateKey:'lands', st:'_lnd', emptyLabel:LAND_NONE,
+    ids:{canvas:'c-land-dynamic', toggles:'land-chart-toggles', gran:'land-gran-btns',
+         tbl:'tbl-lands', time:'land-time-wrap'},
+    group: groupLand,
+    periodTable: renderLandPeriodTable,
+    table: (id, sk, map) => renderDimTable(id, sk, map, buildLandSpendMap(), aMap, SPEND_FILES.length > 0, null,
+      w && {lbl:w.lbl, map:groupLand(w.rows), spend:buildLandSpendMap(w.from, w.to)}),
+  });
+}
+
+// ─── Ленди ─────────────────────────────────────────────
+// Ленд НЕ виводиться з кампанії: розподільник шле трафік однієї кампанії на
+// кілька лендів, тому прив'язка «кампанія = ленд» дала б неправду. Джерело
+// розрізу — поле CRM «Воронка» (`ad_funnel`), джерело грошей — лог заходів
+// розподільника (див. buildLandSpendByPeriod).
+const LAND_NONE = 'Без ленда';
+const LAND_CFG_KEY = 'lands_cfg_v1';
+const LAND_VISITS_KEY = 'lands_visits_v1';
+const DEFAULT_LAND_STATS_URL = 'https://go.green-partners.com.ua/stats';
+
+function getLandCfgRaw() { return localStorage.getItem(LAND_CFG_KEY) || ''; }
+
+// Один рядок — один ленд: «Назва у CRM = ключ у лозі заходів». Ключ не вказано —
+// він дорівнює назві. Другого списку лендів у дашборді немає: усе, чого тут
+// немає, показується як неопізнане, а не підмішується молча.
+function getLandCfg() {
+  const out = [];
+  getLandCfgRaw().split('\n').forEach(ln => {
+    const t = ln.trim();
+    if (!t || t.startsWith('#')) return;
+    const i = t.indexOf('=');
+    const name = (i < 0 ? t : t.slice(0, i)).trim();
+    const key  = (i < 0 ? '' : t.slice(i + 1)).trim();
+    if (name) out.push({ name, key: key || name });
+  });
+  return out;
+}
+
+// Ленди, які приходять із CRM, але в налаштуваннях їх немає.
+function landUnknown(d) {
+  const known = new Set(getLandCfg().map(x => x.name.toLowerCase()));
+  const seen = new Map();
+  d.forEach(r => {
+    const v = (r.ad_funnel || '').trim();
+    if (!v || v === 'Не вказано' || known.has(v.toLowerCase())) return;
+    seen.set(v, (seen.get(v) || 0) + 1);
+  });
+  return [...seen.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+// Лічильник неопізнаних — на самій кнопці. Окремої картки над таблицею немає:
+// розділ цілком живе в попапі.
+function landCfgBadge(d) {
+  const btn = document.getElementById('land-cfg-btn');
+  if (!btn) return;
+  const u = landUnknown(d).length;
+  btn.innerHTML = '⚙ Ленди' + (u ? ` <span style="background:var(--c);color:#0a0e1a;border-radius:8px;padding:0 5px;font-size:10px;font-weight:700">${u}</span>` : '');
+  btn.title = u ? `${u} ленд(ів) із CRM без пари в налаштуваннях — витрати по них не рахуються`
+                : 'Налаштування лендів: посилання ↔ назва у CRM «Воронка»';
+}
+
+function landCfgOpen()  { document.getElementById('land-modal').style.display = 'flex'; landCfgRender(); }
+function landCfgClose() { document.getElementById('land-modal').style.display = 'none'; }
+
+const LAND_ROW_INP = 'width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 9px;border-radius:6px;font-size:12px;outline:none';
+
+// Обидва поля — звичайний ввід. Випадайки тут не треба: ключ ленда Артем
+// переписує з розподільника, назву — з картки CRM.
+function landCfgRowHtml(key = '', name = '') {
+  return `<tr>
+    <td style="padding:4px 6px 4px 0"><input class="land-key" value="${escHtml(key)}" placeholder="green-partners-landing" style="${LAND_ROW_INP}"></td>
+    <td style="padding:4px 0"><input class="land-name" value="${escHtml(name)}" placeholder="СЕС - Green Partners" style="${LAND_ROW_INP}"></td>
+    <td style="padding:4px 0 4px 6px"><button onclick="this.closest('tr').remove()" title="Прибрати рядок"
+      style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 8px;font-size:12px;cursor:pointer">✕</button></td>
+  </tr>`;
+}
+
+function landCfgRender() {
+  const body = document.getElementById('land-modal-body');
+  if (!body) return;
+  const cfg = getLandCfg();
+  const rows = (cfg.length ? cfg : [{key:'', name:''}]).map(x => landCfgRowHtml(x.key, x.name)).join('');
+  const unknown = landUnknown(DATA);
+  const th = 'text-align:left;padding:0 6px 6px 0;color:var(--muted);font-size:11px;font-weight:500';
+  body.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="${th}">Ключ ленда в розподільнику</th><th style="${th};padding-left:0">Назва у CRM «Воронка»</th><th></th></tr></thead>
+      <tbody id="land-rows">${rows}</tbody>
+    </table>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="vt-btn" onclick="document.getElementById('land-rows').insertAdjacentHTML('beforeend', landCfgRowHtml())">+ Додати ленд</button>
+      <button class="vt-btn" onclick="landCfgSave()" style="background:var(--accent);color:#0a0e1a;font-weight:700">Зберегти</button>
+    </div>
+    ${unknown.length ? `<div style="margin-top:12px;font-size:12px;color:var(--c)">⚠️ У CRM є ленди без пари (${unknown.length}): `
+        + unknown.map(([n, c]) => `${escHtml(n)} <span style="color:var(--muted)">· ${c}</span>`).join(', ')
+        + `</div>` : ''}`;
+}
+
+function landCfgSave() {
+  const lines = [];
+  document.querySelectorAll('#land-rows tr').forEach(tr => {
+    const key  = (tr.querySelector('.land-key')?.value  || '').trim();
+    const name = (tr.querySelector('.land-name')?.value || '').trim();
+    if (!name) return;
+    lines.push(key && key !== name ? `${name} = ${key}` : name);
+  });
+  try { localStorage.setItem(LAND_CFG_KEY, lines.join('\n')); } catch(e) {}
+  landCfgClose();
+  render();
+}
+
+function getLandVisits() {
+  try { return JSON.parse(localStorage.getItem(LAND_VISITS_KEY) || '{}'); } catch(e) { return {}; }
+}
+
+function getLandStatsUrl() {
+  return (localStorage.getItem('lands_stats_url') || DEFAULT_LAND_STATS_URL).trim();
+}
+
+// Лог заходів: {rows:[{d:'2026-11-17', campaign_id:'238…', landing:'ukrsib-2', n:418}]}.
+// Заходи — службове число під розкладку витрат, у таблицю вони не виводяться, тому
+// окремої кнопки немає: тягнуться тим самим заходом, що й CRM (як стани заявки).
+// Мерджимо по ключу, а не замінюємо весь store: вікно запиту вузьке, історія довша.
+async function landSyncVisits() {
+  const url = getLandStatsUrl();
+  if (!url) return;
+  const to = new Date();
+  // Лог віддає 400 на вікно довше 400 днів. Історію це не ріже: store кумулятивний,
+  // старі дні вже лежать у localStorage. Без межі синк почав би мовчки падати 04.02.2027.
+  const from = new Date(Math.max(Date.parse('2026-01-01T00:00:00'), to.getTime() - 399 * 86400000));
+  const p2 = n => String(n).padStart(2, '0');
+  const iso = dt => `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())}`;
+  try {
+    const sep = url.includes('?') ? '&' : '?';
+    const resp = await fetch(`${url}${sep}from=${iso(from)}&to=${iso(to)}`);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const rows = data.rows || data || [];
+    const store = getLandVisits();
+    let n = 0;
+    rows.forEach(r => {
+      const d = (r.d || r.date || '').slice(0, 10);
+      const cid = String(r.campaign_id || r.cid || '');
+      const land = String(r.landing || r.land || '');
+      const cnt = +(r.n ?? r.visits ?? 0);
+      if (!d || !land || !cnt) return;
+      store[`${d}|${cid}|${land}`] = cnt;
+      n++;
+    });
+    localStorage.setItem(LAND_VISITS_KEY, JSON.stringify(store));
+    if (n) render();
+  } catch (e) {
+    // Лог недоступний — ліди й категорії по лендах лишаються, порожніють лише гроші.
+    console.warn('лог заходів: ' + (e.message || e));
+  }
+}
+
+// Витрати по ленду в розрізі періодів. Ключ матчингу — campaign_id, а не назва:
+// назву FB віддає поточну, а при перейменуванні кампанії id лишається тим самим.
+// Рядки витрат без campaign_id (старі ручні файли) у розподіл не йдуть.
+// pkOf(isoДата) → ключ періоду; один прохід по витратах на всі періоди.
+function buildLandSpendByPeriod(pkOf,
+                                fromISO = document.getElementById('f-from').value,
+                                toISO   = document.getElementById('f-to').value) {
+  const vis = getLandVisits();
+  const visKeys = Object.keys(vis);
+  if (!visKeys.length) return {};
+  const key2name = {};
+  getLandCfg().forEach(x => { key2name[x.key.toLowerCase()] = x.name; });
+  const campDay = {};
+  getSpendData().forEach(s => {
+    if (!s.campaign_id) return;
+    if (fromISO && s.date < fromISO) return;
+    if (toISO   && s.date > toISO)   return;
+    const k = s.date + '|' + s.campaign_id;
+    campDay[k] = (campDay[k] || 0) + s.spend;
+  });
+  // Ключ — «дата|campaign_id|ленд». Назву ленда відрізаємо залишком рядка, а не
+  // split('|'): ключ ленда приходить з розподільника і «|» в ньому не заборонений.
+  const parts = k => { const i = k.indexOf('|'), j = k.indexOf('|', i + 1);
+                       return [k.slice(0, j), k.slice(j + 1), k.slice(0, i)]; };
+  const visDay = {};
+  visKeys.forEach(k => { const dk = parts(k)[0]; visDay[dk] = (visDay[dk] || 0) + vis[k]; });
+  const out = {};
+  visKeys.forEach(k => {
+    const [dk, land, day] = parts(k);
+    const tot = visDay[dk] || 0, sp = campDay[dk] || 0;
+    if (!tot || !sp) return;
+    const p = pkOf(day);
+    const nkn = (key2name[land.toLowerCase()] || land).trim().toLowerCase();
+    if (!out[p]) out[p] = {};
+    out[p][nkn] = (out[p][nkn] || 0) + sp * vis[k] / tot;
+  });
+  return out;
+}
+
+function buildLandSpendMap(fromISO, toISO) {
+  return buildLandSpendByPeriod(() => '_', fromISO, toISO)['_'] || {};
+}
+
+// Тиждень/місяць у Лендах — та сама таблиця, що в «По днях»: рядки — розріз,
+// колонки — періоди, комірка — вибрана метрика з підсвіткою за величиною.
+const LAND_PERIOD_METRICS = [
+  {key:'n',     label:'Ліди',        cur:false},
+  {key:'A',     label:'A-ліди',      cur:false},
+  {key:'pct_a', label:'% A',         cur:false},
+  {key:'sp',    label:'Витрати',     cur:true},
+  {key:'cpl',   label:'Ціна ліда',   cur:true},
+  {key:'cplA',  label:'Ціна A-ліда', cur:true},
+];
+const LAND_PERIOD_CAP = 26;
+
+function renderLandPeriodTable(ctx) {
+  const { el, keys, periods, pLbl, mx, pkOf } = ctx;
+  if (!el) return;
+  const metric = LAND_PERIOD_METRICS.some(m => m.key === window._lndPeriodMetric)
+    ? window._lndPeriodMetric : 'n';
+  const mc = LAND_PERIOD_METRICS.find(m => m.key === metric);
+  const spP = buildLandSpendByPeriod(pkOf);
+  const nk  = s => (s || '').trim().toLowerCase();
+  const sp  = (k, p) => spP[p]?.[nk(k)] || 0;
+  const val = (k, p) => {
+    const v = mx[p]?.[k], s = sp(k, p);
+    if (metric === 'n')     return v?.n || 0;
+    if (metric === 'A')     return v?.A || 0;
+    if (metric === 'pct_a') return v?.n ? +((v.A || 0) / v.n * 100).toFixed(1) : 0;
+    if (metric === 'sp')    return Math.round(s);
+    if (metric === 'cpl')   return (v?.n && s) ? +(s / v.n).toFixed(2) : 0;
+    if (metric === 'cplA')  return (v?.A && s) ? +(s / v.A).toFixed(2) : 0;
+    return 0;
+  };
+  // Підсумок рядка — не сума комірок: ціну й відсоток треба рахувати від сум,
+  // інакше «середнє середніх» розійдеться з колонкою таблиці «Загалом».
+  const rowTot = k => {
+    const sum = f => periods.reduce((a, p) => a + f(p), 0);
+    const n = sum(p => mx[p]?.[k]?.n || 0), a = sum(p => mx[p]?.[k]?.A || 0), s = sum(p => sp(k, p));
+    if (metric === 'n')     return n;
+    if (metric === 'A')     return a;
+    if (metric === 'pct_a') return n ? +(a / n * 100).toFixed(1) : 0;
+    if (metric === 'sp')    return Math.round(s);
+    if (metric === 'cpl')   return (n && s) ? +(s / n).toFixed(2) : 0;
+    if (metric === 'cplA')  return (a && s) ? +(s / a).toFixed(2) : 0;
+    return 0;
+  };
+  const disp = v => !v ? '·' : mc.cur ? '$' + (metric === 'sp' ? Math.round(v).toLocaleString('en-US') : v.toFixed(1))
+                                      : metric === 'pct_a' ? v.toFixed(1) + '%' : v;
+  const show = periods.length <= LAND_PERIOD_CAP ? periods : periods.slice(-LAND_PERIOD_CAP);
+  const ordered = [...keys].sort((a, b) => rowTot(b) - rowTot(a));
+  let maxVal = 1;
+  ordered.forEach(k => show.forEach(p => { const v = val(k, p); if (v > maxVal) maxVal = v; }));
+
+  const btns = `<div class="view-toggle">${LAND_PERIOD_METRICS.map(m =>
+    `<button class="vt-btn${metric === m.key ? ' active' : ''}" onclick="window._lndPeriodMetric='${m.key}';render()">${m.label}</button>`).join('')}</div>`;
+  let html = `<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin:14px 0 8px">${btns}</div>`;
+  html += `<div class="tbl-wrap"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>`;
+  html += `<th style="text-align:left;padding:6px 8px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600;white-space:nowrap;min-width:140px">Ленд</th>`;
+  html += `<th style="padding:6px 8px;color:var(--accent);border-bottom:2px solid var(--border);text-align:center;font-weight:700;white-space:nowrap">Всього</th>`;
+  show.forEach(p => { html += `<th style="padding:5px 5px;color:var(--muted);border-bottom:2px solid var(--border);border-left:1px solid var(--border);text-align:center;white-space:nowrap;min-width:46px">${escHtml(pLbl(p))}</th>`; });
+  html += '</tr></thead><tbody>';
+  ordered.forEach((k, i) => {
+    html += `<tr style="background:${i % 2 === 0 ? 'var(--surface2)' : 'var(--surface)'}">`;
+    html += `<td style="padding:5px 8px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px" title="${escHtml(k)}">${escHtml(k)}</td>`;
+    html += `<td style="padding:5px 8px;text-align:center;font-weight:700;color:var(--accent)">${disp(rowTot(k))}</td>`;
+    show.forEach(p => {
+      const v = val(k, p);
+      const bg = v > 0 ? `background:rgba(96,165,250,${Math.min(0.65, v / maxVal * 0.55 + 0.1).toFixed(2)})` : '';
+      html += `<td style="padding:4px 5px;text-align:center;${bg};color:${v > 0 ? 'var(--text)' : 'var(--border)'};border-left:1px solid var(--border);font-size:11px">${disp(v)}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  if (periods.length > LAND_PERIOD_CAP) html += `<div style="font-size:10px;color:var(--muted);margin-top:6px">Показані останні ${LAND_PERIOD_CAP} періодів — звузь фільтр дат.</div>`;
+  el.innerHTML = html;
+}
+
 // ── Spend column helper (shared separator style) ──────
 const SEP = 'border-left:2px solid var(--border)';
 function spendCell(v) {
@@ -2743,7 +3101,8 @@ function last7() {
   const p2 = n => String(n).padStart(2,'0');
   const iso = d => `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
   const dm  = d => `${p2(d.getDate())}.${p2(d.getMonth()+1)}`;
-  return { lbl: `${dm(from)}–${dm(to)}`, sm: buildDimSpendMaps(iso(from), iso(to)),
+  return { lbl: `${dm(from)}–${dm(to)}`, from: iso(from), to: iso(to),
+           sm: buildDimSpendMaps(iso(from), iso(to)),
            rows: DATA.filter(r => { const dt = parseDate(r.date); return dt && dt >= from && dt <= to; }) };
 }
 
@@ -6060,6 +6419,7 @@ async function startCRMSync(mode) {
               setCRMStatus('✓ ' + total2 + ' угод' + (wonFileData.length ? ' · ' + wonFileData.length + ' оплат' : ''), 'var(--a)');
               setCRMProgress(100); setTimeout(() => setCRMProgress(-1), 2000); enableSyncBtns();
               stSyncStates();
+              landSyncVisits();
             })
             .catch(() => {
               // /api/data теж не вдалось → повідомляємо без втрати даних
@@ -6105,6 +6465,7 @@ async function startCRMSync(mode) {
         // Стани заявки («Недодзвон» / «У кваліфікації») — частина того самого оновлення:
         // окремої кнопки немає, читаємо таблицю робота одним GET і перемальовуємо.
         stSyncStates();
+        landSyncVisits();
         return;
       }
 
@@ -6830,7 +7191,7 @@ function dateChunks(since, until, days) {
 
 /** Один запит на одне вікно. Повертає рядки витрат; помилку FB віддає як є. */
 async function fbInsightsWindow(cleanId, since, until, token) {
-  const fields = 'campaign_name,adset_name,ad_name,spend';
+  const fields = 'campaign_id,campaign_name,adset_name,ad_name,spend';
   const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
   // level=ad → дані на рівні кожного оголошення, включно з ad_name
   let url = `${FB_API}/${cleanId}/insights?fields=${fields}&level=ad&time_increment=1&time_range=${timeRange}&limit=500&access_token=${token}`;
@@ -6844,6 +7205,7 @@ async function fbInsightsWindow(cleanId, since, until, token) {
       if (spend <= 0) continue; // skip zero-spend rows
       rows.push({
         date:     r.date_start,
+        campaign_id: r.campaign_id || '',
         campaign: r.campaign_name || '',
         adset:    r.adset_name    || '',
         ad:       r.ad_name       || '',
