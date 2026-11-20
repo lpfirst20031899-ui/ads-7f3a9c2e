@@ -26,7 +26,11 @@ from datetime import datetime, timedelta, timezone
 # ══════════════════════════════════════════════
 #  НАЛАШТУВАННЯ  (ті самі, що в crm_proxy.py)
 # ══════════════════════════════════════════════
-API_KEY  = "1PtL9c3Qc1S8iiRDgazx2Yv1"
+# Ключ CRM береться зі змінної Render, а не з коду: 20.11.2026 цей файл залили
+# у публічний репозиторій, і ключ разом з ним лежав відкритим на
+# raw.githubusercontent.com. Немає ключа у файлі — публічна копія файлу нічого
+# не віддає, хоч би куди її залили.
+API_KEY  = os.environ.get('CRM_KEY', '')
 CRM_BASE = "https://api.keepincrm.com/v1"
 DELAY_MS = 650   # Ліміт CRM ~100 запитів/хв = 600 мс/запит. 650 мс тримає нас під лімітом
                  # (200 мс давало ~300/хв → 429 Too Many Requests, ще й разом із роботами дублів/коментарів).
@@ -435,6 +439,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path.startswith('/api/'):
             if not PROXY_SECRET:
                 self._json({'ok': False, 'message': 'PROXY_SECRET не заданий у змінних Render'}, 503); return
+            if not API_KEY:
+                self._json({'ok': False, 'message': 'CRM_KEY не заданий у змінних Render'}, 503); return
             if not token_ok(self.path):
                 self._json({'ok': False, 'message': 'Потрібен вхід'}, 401); return
         if self.path.startswith('/api/sync'):

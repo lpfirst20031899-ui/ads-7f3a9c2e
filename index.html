@@ -6534,8 +6534,10 @@ async function testCRMProxyUrl() {
   if (hint) { hint.textContent = '⏳ ' + (isCloud ? 'Будимо сервер (до 60 сек)...' : 'Перевіряємо...'); hint.style.color = 'var(--muted)'; }
   if (isCloud) {
     const woken = await _wakeServer(proxyUrl, 70);
-    if (!woken) {
-      if (hint) { hint.textContent = '❌ Сервер не відповів за 70 сек. Перевір Render.com'; hint.style.color = 'var(--lost)'; }
+    if (woken !== true) {
+      const say = typeof woken === 'string' ? '❌ ' + woken
+                : '❌ Сервер не відповів за 70 сек. Перевір Render.com';
+      if (hint) { hint.textContent = say; hint.style.color = 'var(--lost)'; }
       return;
     }
   }
@@ -6579,6 +6581,13 @@ async function _wakeServer(proxyUrl, maxSec) {
       // 401 теж означає «прокинувся»: ворота відповіли, значить інстанс живий.
       // Інакше з воротами будилка крутилась би всі 70 секунд і здавалась.
       if (r.ok || r.status === 401) return true;
+      // Проксі відповів своїм JSON — інстанс живий, бракує змінної на Render
+      // (`PROXY_SECRET`, `CRM_KEY`). Повертаємо текст: без нього будилка крутила
+      // всі 70 секунд і писала «сервер не відповів», хоча сервер відповів і
+      // назвав причину. Холодний старт Render віддає свою HTML-заглушку без
+      // `message` — її так само чекаємо далі.
+      const said = await r.json().then(j => j && j.message).catch(() => '');
+      if (said) return String(said);
     } catch(e) { /* server still sleeping */ }
     await new Promise(res => setTimeout(res, 3000));
   }
@@ -6605,8 +6614,9 @@ async function startCRMSync(mode) {
   if (isCloud) {
     setCRMStatus('⏳ Будимо сервер (Render може спати ~30 сек)...', 'var(--muted)');
     const woken = await _wakeServer(proxyUrl, 70);
-    if (!woken) {
-      setCRMStatus('⚠ Сервер не відповідає — дані з кешу', 'var(--muted)');
+    if (woken !== true) {
+      if (typeof woken === 'string') setCRMStatus('⚠ ' + woken, 'var(--lost)');
+      else setCRMStatus('⚠ Сервер не відповідає — дані з кешу', 'var(--muted)');
       enableSyncBtns(); return;
     }
     setCRMStatus('✅ Сервер активний, починаємо синхронізацію...', 'var(--muted)');

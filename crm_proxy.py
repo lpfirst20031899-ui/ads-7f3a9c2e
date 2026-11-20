@@ -28,7 +28,12 @@ from datetime import datetime, timedelta, timezone
 # ══════════════════════════════════════════════
 #  НАЛАШТУВАННЯ
 # ══════════════════════════════════════════════
-API_KEY  = "1PtL9c3Qc1S8iiRDgazx2Yv1"   # KeepinCRM API-ключ
+# Той самий ключ, що в облачному, і теж не в коді: цей файл теж уїжджає в
+# публічний репозиторій. Локально змінних Render немає, тому друга дорога —
+# файл crm_key.txt поруч зі скриптом. У заливку він не входить (make_github.py).
+_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crm_key.txt')
+API_KEY  = os.environ.get('CRM_KEY', '') or (
+    open(_KEY_FILE, encoding='utf-8').read().strip() if os.path.exists(_KEY_FILE) else '')
 PORT     = 8765                            # Порт локального сервера
 CRM_BASE = "https://api.keepincrm.com/v1" # Базовий URL API
 DELAY_MS = 200                             # Затримка між запитами (мс) — ліміт 100 req/min
@@ -577,7 +582,8 @@ def main():
     local_ip = _get_local_ip()
     print(f'  Комп\'ютер: http://localhost:{PORT}')
     print(f'  Телефон:   http://{local_ip}:{PORT}')
-    print(f'  API ключ:  {API_KEY[:8]}…{API_KEY[-4:]}')
+    print('  API ключ:  ' + (f'{API_KEY[:8]}…{API_KEY[-4:]}' if API_KEY
+          else 'НЕ ЗАДАНИЙ — поклади ключ у crm_key.txt поруч зі скриптом'))
     print(f'  HTML файл: {DASHBOARD_FILE}')
     if not os.path.exists(DASHBOARD_FILE):
         print()
