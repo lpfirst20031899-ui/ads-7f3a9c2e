@@ -389,7 +389,7 @@ tr:hover td{background:var(--surface2)}
   <div id="crm-url-row" style="display:none;margin-top:10px;display:none">
     <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Proxy URL <span style="color:var(--accent)">(localhost або ngrok)</span></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <input id="crm-proxy-url-input" type="text" placeholder="https://crm-proxy-n0ib.onrender.com"
+      <input id="crm-proxy-url-input" type="text" placeholder="https://crm-proxy-lp.onrender.com"
         style="flex:1;min-width:220px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;outline:none"
         oninput="saveCRMProxyUrl(this.value)">
       <button onclick="testCRMProxyUrl()"
@@ -1299,6 +1299,19 @@ function getSpendData(applyUserFilter = true) {
 // а разом з ним не малювались закріплені метрики. І не в FB-блоці нижче: генератор
 // дубля вирізає його цілком, і в дублі константа зникала — «is not defined».
 const PROXY_TOKEN_KEY = 'crm_proxy_token';
+// Адрес облачного проксі — одне місце на весь файл; оголошення тут, а не поряд
+// з getCRMProxyUrl(): bootRestoreCRM зветься вище того місця, і const давав
+// «Cannot access 'CLOUD_PROXY_URL' before initialization» — старт падав цілком
+// (спіймано стендом 20.11.2026). Сервіс свій: той, що лежить
+// в акаунті Render власника і збирається з його ж сховища crm-proxy. Прежній
+// (crm-proxy-n0ib) жив у чужому акаунті — ні змінних, ні деплою туди не дотягнутись.
+const CLOUD_PROXY_URL = 'https://crm-proxy-lp.onrender.com';
+// Прежні адреси: збережений руками адрес важливіший за вгадування і тримав би
+// дашборд на мертвому сервері назавжди. Знімаємо саме ці хости, а не чистимо ключ
+// узагалі: інші збережені адреси (ngrok, локальний прокси) лишаються. n0ib жив
+// у чужому акаунті Render, 55t7 збирався з чужого сховища GitHub — у жодний із них
+// правки не доїжджали.
+const DEAD_PROXY_HOSTS = ['crm-proxy-n0ib.onrender.com', 'crm-proxy-55t7.onrender.com'];
 // Сесія входу і прапорець власника — там же й з тієї ж причини (TDZ у render()).
 const DASH_SESSION_KEY = 'dash_session';
 const DASH_OWNER_KEY = 'dash_owner';
@@ -6217,7 +6230,11 @@ function _isLocalProxy(url) {
   return /localhost|127\.\d|\.local(:|\/|$)|\/\/(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url);
 }
 function getCRMProxyUrl() {
-  const saved = localStorage.getItem('crm_proxy_url');
+  let saved = localStorage.getItem('crm_proxy_url');
+  if (saved && DEAD_PROXY_HOSTS.some(h => saved.includes(h))) {
+    localStorage.removeItem('crm_proxy_url');
+    saved = null;
+  }
   if (saved) return saved.replace(/\/$/, '');
   // Локальний проксі беремо лише коли сама сторінка відкрита з цієї машини або LAN.
   // До 21.10.2026 тут був перелік хостингів ('netlify', 'render', '.app'), і будь-який
@@ -6226,7 +6243,7 @@ function getCRMProxyUrl() {
   if (window.location.hostname && _isLocalProxy(org)) {
     return window.location.protocol + '//' + window.location.hostname + ':8765';
   }
-  return 'https://crm-proxy-n0ib.onrender.com';
+  return CLOUD_PROXY_URL;
 }
 // ─── Вхід: пошта й пароль ───────────────────────────────────────────────────
 // На GitHub Pages серверної функції немає, підписати токен у браузері не можна —
@@ -6453,15 +6470,17 @@ async function openAccess() {
     try {
       const d = await dashApi('/users');
       q('[data-x=list]').innerHTML = d.users.map(u => {
-        const when = u.last_login_at ? 'вхід ' + String(u.last_login_at).slice(0, 10) : 'ще не входив';
+        // У власника рядка в базі немає, і «ще не входив» на його ж екрані читалось би
+        // як помилка — дати входу в нього просто не існує.
+        const when = u.is_owner ? '' : (u.last_login_at ? 'вхід ' + String(u.last_login_at).slice(0, 10) : 'ще не входив');
         const right = u.is_owner
           ? '<span style="color:var(--muted);font-size:11px">власник · пароль у секреті воркера</span>'
           : `<span style="display:flex;gap:6px">
                <button type="button" style="${btn}" data-reset="${escHtml(u.email)}">Новий пароль</button>
                <button type="button" style="${btn}" data-drop="${escHtml(u.email)}">Видалити</button></span>`;
         return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface2)">
-            <span><strong>${escHtml(u.email)}</strong>
-              <span style="color:var(--muted);font-size:11px"> · ${escHtml(when)}</span></span>${right}</div>`;
+            <span><strong>${escHtml(u.email)}</strong>${when
+              ? `<span style="color:var(--muted);font-size:11px"> · ${escHtml(when)}</span>` : ''}</span>${right}</div>`;
       }).join('');
     } catch (e) {
       q('[data-x=list]').innerHTML = '';
