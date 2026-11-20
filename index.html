@@ -356,6 +356,8 @@ tr:hover td{background:var(--surface2)}
       <button onclick="toggleRobotsRow()"
         style="background:var(--surface3);color:var(--muted);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:11px;cursor:pointer"
         title="Посилання на роботів Google Apps Script — станів і коментарів">⚙ Роботи</button>
+      <button id="btn-access" onclick="openAccess()" style="display:none;background:var(--surface3);color:var(--muted);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:11px;cursor:pointer"
+        title="Видати або прибрати доступ до дашборда">🔑 Доступи</button>
     </div>
     <div>
       <div id="crm-status" style="font-size:12px;color:var(--muted)">Натисни для синхронізації</div>
@@ -1297,6 +1299,13 @@ function getSpendData(applyUserFilter = true) {
 // а разом з ним не малювались закріплені метрики. І не в FB-блоці нижче: генератор
 // дубля вирізає його цілком, і в дублі константа зникала — «is not defined».
 const PROXY_TOKEN_KEY = 'crm_proxy_token';
+// Сесія входу і прапорець власника — там же й з тієї ж причини (TDZ у render()).
+const DASH_SESSION_KEY = 'dash_session';
+const DASH_OWNER_KEY = 'dash_owner';
+// Список людей і паролі дашборда лежать у воркері конвейера (lead-router,
+// src/dash.js): у статичної сторінки своєї бази немає, а в проксі на Render
+// файлова система тимчасова — /tmp стирається разом зі списком.
+const DASH_AUTH_URL = 'https://go.green-partners.com.ua/dash/api';
 const AD_ALIAS_KEY = 'ad_name_aliases';
 let _adAliasCache;
 function adAliasMap() {
@@ -2081,6 +2090,10 @@ function render() {
       ? `вхід: <strong>${escHtml(who)}</strong> · <a href="#" onclick="proxyLogout();return false" style="color:var(--muted)">вийти</a>`
       : '';
   }
+  // Кнопка доступів — тільки власнику. Права перевіряє воркер (403 чужому),
+  // тут лише щоб кнопки не було видно тим, кому вона не потрібна.
+  const _acc = document.getElementById('btn-access');
+  if (_acc) _acc.style.display = (isDashOwner() && getProxyLogin()) ? '' : 'none';
   const d = filterData();
   document.getElementById('badge').textContent = d.length.toLocaleString()+' лідів';
   renderKPIs(d);
@@ -2791,8 +2804,18 @@ function renderLands(d) {
          tbl:'tbl-lands', time:'land-time-wrap'},
     group: groupLand,
     periodTable: renderLandPeriodTable,
-    table: (id, sk, map) => renderDimTable(id, sk, map, buildLandSpendMap(), aMap, SPEND_FILES.length > 0, null,
-      w && {lbl:w.lbl, map:groupLand(w.rows), spend:buildLandSpendMap(w.from, w.to)}),
+    table: (id, sk, map) => {
+      const spend = buildLandSpendMap();
+      const left = landUnallocated(spend);
+      // Рядок з'являється тільки коли є нерозкладене: нуль у таблиці нічого не
+      // каже, а порожній рядок щодня заважав би читати.
+      if (left >= 0.01) {
+        map = { ...map, [LAND_UNALLOC]: {} };
+        spend[LAND_UNALLOC.toLowerCase()] = left;
+      }
+      return renderDimTable(id, sk, map, spend, aMap, SPEND_FILES.length > 0, null,
+        w && {lbl:w.lbl, map:groupLand(w.rows), spend:buildLandSpendMap(w.from, w.to)});
+    },
   });
 }
 
@@ -2802,8 +2825,13 @@ function renderLands(d) {
 // розрізу — поле CRM «Воронка» (`ad_funnel`), джерело грошей — лог заходів
 // розподільника (див. buildLandSpendByPeriod).
 const LAND_NONE = 'Без ленда';
+// Витрати, які не лягли на жоден ленд: лог заходів по цьому дню й кампанії нічого
+// не дав і адсет не впізнаний. Окремий рядок, а не мовчазна втрата — інакше сума
+// колонки «Витрати» менша за кабінет, і побачити це нема де.
+const LAND_UNALLOC = 'Не розкладено';
 const LAND_CFG_KEY = 'lands_cfg_v1';
-const LAND_VISITS_KEY = 'lands_visits_v1';
+const LAND_VISITS_KEY = 'lands_visits_v2';
+const LAND_VISITS_KEY_OLD = 'lands_visits_v1';
 const DEFAULT_LAND_STATS_URL = 'https://go.green-partners.com.ua/stats';
 
 function getLandCfgRaw() { return localStorage.getItem(LAND_CFG_KEY) || ''; }
@@ -2832,10 +2860,14 @@ function getLandStatsUrl() {
   return (localStorage.getItem('lands_stats_url') || DEFAULT_LAND_STATS_URL).trim();
 }
 
-// Лог заходів: {rows:[{d:'2026-11-17', campaign_id:'238…', landing:'ukrsib-2', n:418}]}.
+// Лог заходів: {rows:[{d, campaign_id, campaign, landing, name, n}]}, де `name` —
+// заголовок ленда в розподільнику (він же в полі «Воронка» CRM), `landing` — його
+// адреса. Збігається з CRM саме ім'я: поки розподільник віддавав один адрес,
+// порівняння не сходилось і заходи викидались — 4 162 із 4 343 за авг–ноя 2026.
 // Заходи — службове число під розкладку витрат, у таблицю вони не виводяться, тому
 // окремої кнопки немає: тягнуться тим самим заходом, що й CRM (як стани заявки).
-// Мерджимо по ключу, а не замінюємо весь store: вікно запиту вузьке, історія довша.
+// День замінюється цілком, а не мерджиться по ключу: лог віддає добу повністю,
+// а мердж залишав би рядки кампанії, яку за день перейменували.
 async function landSyncVisits() {
   const url = getLandStatsUrl();
   if (!url) return;
@@ -2852,18 +2884,25 @@ async function landSyncVisits() {
     const data = await resp.json();
     const rows = data.rows || data || [];
     const store = getLandVisits();
-    let n = 0;
+    const days = {};
     rows.forEach(r => {
       const d = (r.d || r.date || '').slice(0, 10);
-      const cid = String(r.campaign_id || r.cid || '');
-      const land = String(r.landing || r.land || '');
+      // Ім'я ленда, а не адреса: по ньому йде звірка з «Воронкою» CRM. Старий
+      // лог імені не віддає — тоді лишається адреса, як і було.
+      const land = String(r.name || r.landing || r.land || '');
       const cnt = +(r.n ?? r.visits ?? 0);
       if (!d || !land || !cnt) return;
-      store[`${d}|${cid}|${land}`] = cnt;
-      n++;
+      (days[d] = days[d] || []).push({
+        c: String(r.campaign_id || r.cid || ''),
+        m: String(r.campaign || ''),
+        l: land,
+        n: cnt,
+      });
     });
+    Object.keys(days).forEach(d => { store[d] = days[d]; });
     localStorage.setItem(LAND_VISITS_KEY, JSON.stringify(store));
-    if (n) render();
+    localStorage.removeItem(LAND_VISITS_KEY_OLD);
+    if (Object.keys(days).length) render();
   } catch (e) {
     // Лог недоступний — ліди й категорії по лендах лишаються, порожніють лише гроші.
     console.warn('лог заходів: ' + (e.message || e));
@@ -2896,18 +2935,15 @@ function buildLandByAdset() {
 }
 
 // Витрати по ленду в розрізі періодів. Перше джерело — лог заходів розподільника:
-// ключ матчингу campaign_id, а не назва (назву FB віддає поточну, id не їде при
-// перейменуванні). Друге — карта «адсет → ленд» із самих заявок CRM; вона бере
-// рядки витрат, по яких лог нічого не дав: без campaign_id (старі ручні файли,
-// і живий лог станом на 18.11.2026 — 7 рядків, 12 заходів, campaign_id порожній
-// у всіх) або з ключем ленда, якого немає серед воронок CRM.
+// витрати кампанії за день × частка заходів цього ленда в ній за той самий день.
+// Друге — карта «адсет → ленд» із самих заявок CRM; вона бере рядки витрат, по
+// яких лог нічого не дав.
 // pkOf(isoДата) → ключ періоду; один прохід по витратах на всі періоди.
 function buildLandSpendByPeriod(pkOf,
                                 fromISO = document.getElementById('f-from').value,
                                 toISO   = document.getElementById('f-to').value) {
   const nk = s => (s || '').trim().toLowerCase();
   const vis = getLandVisits();
-  const visKeys = Object.keys(vis);
   const key2name = {};
   getLandCfg().forEach(x => { key2name[x.key.toLowerCase()] = x.name; });
   // Воронки, які реально є в заявках: ленд із логу, якого тут немає, рядка в
@@ -2917,40 +2953,56 @@ function buildLandSpendByPeriod(pkOf,
   DATA.forEach(r => { const v = (r.ad_funnel || '').trim(); if (v) known.add(v.toLowerCase()); });
   const rows = getSpendData().filter(s =>
     !(fromISO && s.date < fromISO) && !(toISO && s.date > toISO));
-  const campDay = {};
+  // Один ключ кампанії і для витрат, і для заходів. Інакше та сама кампанія
+  // роздала б гроші двічі: раз по номеру, раз по імені. Номер первинний — назву
+  // FB віддає поточну, id не їде при перейменуванні; старі ручні файли витрат
+  // номера не мають, для них ключ — ім'я.
+  const campKey = s => s.campaign_id || nk(s.campaign);
+  const campDay = {}, idByName = {};
   rows.forEach(s => {
-    if (!s.campaign_id) return;
-    const k = s.date + '|' + s.campaign_id;
+    const k = s.date + '|' + campKey(s);
     campDay[k] = (campDay[k] || 0) + s.spend;
+    const nm = nk(s.campaign);
+    if (nm && s.campaign_id) (idByName[nm] = idByName[nm] || new Set()).add(s.campaign_id);
   });
-  // Ключ — «дата|campaign_id|ленд». Назву ленда відрізаємо залишком рядка, а не
-  // split('|'): ключ ленда приходить з розподільника і «|» в ньому не заборонений.
-  const parts = k => { const i = k.indexOf('|'), j = k.indexOf('|', i + 1);
-                       return [k.slice(0, j), k.slice(j + 1), k.slice(0, i)]; };
-  const visDay = {}, covered = new Set();
-  visKeys.forEach(k => {
-    const [dk, land] = parts(k);
-    if (!known.has(nk(key2name[land.toLowerCase()] || land))) return;
-    visDay[dk] = (visDay[dk] || 0) + vis[k];
-    covered.add(dk);
-  });
-  const out = {};
+  // Мітку `c={{campaign.id}}` ставлять не у всіх об'явах — 19.11.2026 без номера
+  // прийшли 607 заходів із 1 059. Такий захід бере номер по імені кампанії і лише
+  // коли ім'я однозначне: два номери на одне ім'я — це вигадати, кому з них гроші.
+  const keyOfVisit = v => {
+    if (v.c) return v.c;
+    const nm = nk(adAliasResolve(v.m));
+    if (!nm) return '';
+    const ids = idByName[nm];
+    return ids && ids.size === 1 ? [...ids][0] : nm;
+  };
+  const out = {}, covered = new Set();
   const add = (day, land, sp) => {
     const p = pkOf(day);
     if (!out[p]) out[p] = {};
     out[p][nk(land)] = (out[p][nk(land)] || 0) + sp;
   };
-  visKeys.forEach(k => {
-    const [dk, land, day] = parts(k);
-    const tot = visDay[dk] || 0, sp = campDay[dk] || 0;
-    if (!tot || !sp) return;
-    const nkn = nk(key2name[land.toLowerCase()] || land);
-    if (!known.has(nkn)) return;
-    add(day, nkn, sp * vis[k] / tot);
+  const landOf = v => nk(key2name[nk(v.l)] || v.l);
+  Object.keys(vis).forEach(day => {
+    if ((fromISO && day < fromISO) || (toISO && day > toISO)) return;
+    const list = vis[day] || [];
+    const tot = {};
+    list.forEach(v => {
+      if (!known.has(landOf(v))) return;
+      const k = keyOfVisit(v);
+      if (k) tot[k] = (tot[k] || 0) + v.n;
+    });
+    list.forEach(v => {
+      const land = landOf(v);
+      if (!known.has(land)) return;
+      const k = keyOfVisit(v), t = tot[k] || 0, sp = campDay[day + '|' + k] || 0;
+      if (!t || !sp) return;
+      add(day, land, sp * v.n / t);
+      covered.add(day + '|' + k);
+    });
   });
   const byAdset = buildLandByAdset();
   rows.forEach(s => {
-    if (s.campaign_id && covered.has(s.date + '|' + s.campaign_id)) return;
+    if (covered.has(s.date + '|' + campKey(s))) return;
     const a = nk(s.adset);
     if (!a) return;
     const land = byAdset.pair[nk(s.campaign) + '||' + a] || byAdset.adset[a];
@@ -2961,6 +3013,19 @@ function buildLandSpendByPeriod(pkOf,
 
 function buildLandSpendMap(fromISO, toISO) {
   return buildLandSpendByPeriod(() => '_', fromISO, toISO)['_'] || {};
+}
+
+// Скільки витрат періоду не лягло на жоден ленд: лог по цій кампанії й дню нічого
+// не дав, адсет не впізнаний. Рядком у таблиці, а не мовчки: сума колонки «Витрати»
+// зобов'язана дорівнювати кабінету, інакше розбіжність не видно ніде.
+function landUnallocated(spendMap,
+                         fromISO = document.getElementById('f-from').value,
+                         toISO   = document.getElementById('f-to').value) {
+  const all = getSpendData()
+    .filter(s => !(fromISO && s.date < fromISO) && !(toISO && s.date > toISO))
+    .reduce((a, s) => a + s.spend, 0);
+  const put = Object.values(spendMap).reduce((a, v) => a + v, 0);
+  return Math.max(0, all - put);
 }
 
 // Тиждень/місяць у Лендах — та сама таблиця, що в «По днях»: рядки — розріз,
@@ -5829,6 +5894,33 @@ try {
   }
   renderSpendFilesList();
 } catch(e) {}
+// Видалену в CRM угоду мердж по id сам не прибирає — вона жила в localStorage
+// вічно, і в статистику лізли видалені заявки (живьём 19.11.2026 дашборд показував
+// 20 заявок при 18 у CRM). Потрібні заявки Артем не видаляє, а переводить у статус
+// або в програні, тому все, чого у відповіді немає, видалено.
+//
+// Питати це можна лише там, де відповідь ПОВНА, і межу повноти дає сам проксі:
+// `since` у `done_signal` для синку, `cache_since` у `/api/data` для старту
+// (повне оновлення — '2026-01-01', інкремент — перший день свого вікна). Заявка
+// з датою в межах вікна інакше не буває: її `updated_at` не менший за дату заявки,
+// значить у відповіді вона є. Старіше `since` не чистимо — живу угоду, якої три
+// місяці не торкались, інкремент не повертає, і чистка знесла б історію.
+function dropDeleted(lists, fresh, since) {
+  if (!since) return 0;
+  const seen = new Set();
+  (fresh || []).forEach(a => (a || []).forEach(r => { if (r && r.id != null) seen.add(String(r.id)); }));
+  const iso = r => { const p = String((r && r.date) || '').split(' ')[0].split('.');
+                     return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : ''; };
+  let gone = 0;
+  (lists || []).forEach(l => {
+    for (let i = l.length - 1; i >= 0; i--) {
+      const r = l[i];
+      if (r && r.id != null && !seen.has(String(r.id)) && iso(r) >= since) { l.splice(i, 1); gone++; }
+    }
+  });
+  return gone;
+}
+
 function applyRestoredCRMData(active, lost, won) {
   activeFileData = active || [];
   lostFileData   = lost   || [];
@@ -5879,31 +5971,67 @@ function applyRestoredCRMData(active, lost, won) {
     }
   } catch(e) {}
 
-  // 2. Тихо пробуємо сервер (лише якщо це cloud URL і не localhost) — без блокування
-  {
+  // 2. Тихо пробуємо сервер (лише якщо це cloud URL і не localhost).
+  //
+  // САМОВИКЛИК БЕЗ await — і це не стиль, а умова роботи. Render на free tier
+  // засинає і прокидається 30–60 секунд, а чекали 6: знімок майже ніколи не
+  // встигав, дашборд лишався на локальних даних, і видалені заявки з нього не
+  // знімались (19.11.2026 — 20 заявок при 18 у CRM). Чекати 60 секунд перед
+  // першим малюванням теж не можна, тому запит іде у фон: інтерфейс малюється
+  // на локальних даних відразу, а знімок застосовується сам, коли прийде.
+  (async () => {
     try {
       const proxyUrl = getCRMProxyUrl();
       const isCloud = !proxyUrl.includes('localhost') && !proxyUrl.includes('127.0.0.1');
       if (isCloud) {
-        const _sig = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined;
-        const r = await proxyFetch(proxyUrl, '/api/data', {
+        const _sig = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(60000) : undefined;
+        const opts = {
           headers: { 'ngrok-skip-browser-warning': 'true' },
           ...(  _sig ? { signal: _sig } : {})
-        }, true);
+        };
+        let r = await proxyFetch(proxyUrl, '/api/data', opts, true);
+        // Нова людина приходить без пропуску: показуємо форму входу відразу, а не
+        // порожній дашборд без жодного слова. 401 тут означає саме «пропуску немає
+        // або він прострочений» — тихий обмін сесії proxyFetch уже спробував.
+        if (r.status === 401) {
+          if (await proxyLogin(proxyUrl)) r = await proxyFetch(proxyUrl, '/api/data', opts, true);
+          else setCRMStatus('Потрібен вхід: пошта і пароль від власника', 'var(--muted)');
+        }
         if (r.ok) {
           const d = await r.json();
           if ((d.active && d.active.length) || (d.lost && d.lost.length)) {
-            applyRestoredCRMData(d.active, d.lost, d.won);
+            /* Знімок не замінює локальні дані, а зливається з ними по id: кеш
+               проксі живе в /tmp і після засинання Render збирається інкрементом,
+               тобто старіших днів у ньому може не бути вовсе. Замість них
+               лишаються локальні рядки — але тільки ті, що за межею повноти
+               знімка; усе всередині межі, чого в знімку немає, видалено в CRM
+               (dropDeleted). До цієї правки видалена заявка жила в браузері до
+               наступного синку, і Артем бачив 20 заявок при 18 у CRM. */
+            const byId = (local, snap) => {
+              const m = new Map(), out = [];
+              (local || []).forEach(x => { if (x && x.id != null) m.set(String(x.id), x); else out.push(x); });
+              (snap  || []).forEach(x => { if (x && x.id != null) m.set(String(x.id), x); else out.push(x); });
+              return [...m.values(), ...out];
+            };
+            const lists = [byId(activeFileData, d.active), byId(lostFileData, d.lost), byId(wonFileData, d.won)];
+            const gone = dropDeleted(lists, [d.active, d.lost, d.won], String(d.cache_since || ''));
+            activeFileData = lists[0]; lostFileData = lists[1]; wonFileData = lists[2];
+            /* mergeData, а не applyRestoredCRMData: заодно перезаписує
+               localStorage — інакше зняті заявки повернулись би на наступному
+               відкритті сторінки. */
+            mergeData();
             restored = true;
             if (d.synced_at) {
               const age = Math.floor((Date.now() - new Date(d.synced_at).getTime()) / 3600000);
-              setCRMStatus((age < 1 ? 'Дані свіжі ✓' : 'Оновлено ' + age + ' год тому'), 'var(--muted)');
+              setCRMStatus((age < 1 ? 'Дані свіжі ✓' : 'Оновлено ' + age + ' год тому')
+                           + (gone ? ' · знято ' + gone + ' видалених' : ''), 'var(--muted)');
             }
+            render();
           }
         }
       }
     } catch(e) { /* сервер не відповідає — не проблема, є localStorage */ }
-  }
+  })();
 
   initFilters();
   initTabs();
@@ -6100,39 +6228,104 @@ function getCRMProxyUrl() {
   }
   return 'https://crm-proxy-n0ib.onrender.com';
 }
-// ─── Вхід у проксі: токен підписує сам проксі ───────────────────────────────
-// На GitHub Pages серверної функції немає, а підписати токен на клієнті не можна —
-// секрет приїхав би у браузер разом зі сторінкою. Тому пароль іде POST /api/login,
-// проксі перевіряє його в себе і віддає підписаний `exp.sig`. Токен живе в
-// localStorage: вводити пароль щоразу не треба, строк задає TOKEN_DAYS на Render.
+// ─── Вхід: пошта й пароль ───────────────────────────────────────────────────
+// На GitHub Pages серверної функції немає, підписати токен у браузері не можна —
+// секрет приїхав би на сторінку. Список людей і паролі тримає воркер конвейера
+// (lead-router, src/dash.js), дані CRM — проксі на Render. Тому пропусків два:
+// сесія (30 днів) лежить у localStorage, і вона міняється на короткий токен
+// проксі (12 годин). Відкликання працює саме через цей обмін: власник прибрав
+// пошту — наступний обмін закритий, а старий токен догорає, максимум 12 годин.
+// Друга хвіртка — вхід у сам проксі за DASH_USERS: нею власник дістане дані,
+// якщо воркер доступів лежить.
 function getProxyToken() {
   const t = localStorage.getItem(PROXY_TOKEN_KEY) || '';
-  // Прострочений віддавати не треба: інакше кожен запит іде по колу 401 → prompt.
+  // Прострочений віддавати не треба: інакше кожен запит іде по колу 401 → пароль.
   const exp = Number(String(t).split('.')[0]);
   return (exp && exp * 1000 > Date.now()) ? t : '';
 }
 
+// Оголошення, а не стрілки в const: render() зветься на завантаженні раніше цього
+// місця, і const давав би «Cannot access 'isDashOwner' before initialization» —
+// сторінка падала б на старті. Жива регресія, спіймана стендом.
+function getDashSession() { return localStorage.getItem(DASH_SESSION_KEY) || ''; }
+// Прапорець лише для кнопок: права перевіряє воркер (403 чужому), а не сторінка.
+function isDashOwner() { return localStorage.getItem(DASH_OWNER_KEY) === '1'; }
+
 /** URL запиту до проксі з токеном. Локальний проксі воріт не має — там токен лишній. */
-/** Токен: `exp.логін.підпис`. Строк — перше поле, логін — друге. */
+/** Токен: `exp.пошта.підпис`. Строк — перше поле, пошта — між першою й останньою точкою. */
 function apiUrl(proxyUrl, path) {
   const t = getProxyToken();
   if (!t || _isLocalProxy(proxyUrl)) return proxyUrl + path;
   return proxyUrl + path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(t);
 }
 
-/** Логін із токена — щоб показати, хто увійшов, і дати кнопку «вийти». */
+/** Хто увійшов — щоб показати це в панелі й дати кнопку «вийти».
+    split('.')[1] тут не годиться: у пошті теж крапки, і від
+    `1770000000.ivan@mail.com.<підпис>` лишилось би «ivan@mail». */
 function getProxyLogin() {
-  return String(getProxyToken()).split('.')[1] || '';
+  const t = getProxyToken();
+  const a = t.indexOf('.'), b = t.lastIndexOf('.');
+  return (a > 0 && b > a) ? t.slice(a + 1, b) : '';
 }
 
 function proxyLogout() {
   localStorage.removeItem(PROXY_TOKEN_KEY);
+  localStorage.removeItem(DASH_SESSION_KEY);
+  localStorage.removeItem(DASH_OWNER_KEY);
   render();
 }
 
+function saveDashPasses(d) {
+  if (d.t) localStorage.setItem(PROXY_TOKEN_KEY, d.t);
+  if (d.session) localStorage.setItem(DASH_SESSION_KEY, d.session);
+  localStorage.setItem(DASH_OWNER_KEY, d.owner ? '1' : '0');
+}
+
+function dropDashSession() {
+  localStorage.removeItem(DASH_SESSION_KEY);
+  localStorage.removeItem(DASH_OWNER_KEY);
+}
+
+/** Запит до воркера доступів. Сесія йде заголовком, а не cookie: сторінка на
+    чужому домені, cookie воркера була б для неї сторонньою — Safari і Chrome
+    ріжуть такі мовчки. Заодно це знімає CSRF: чужа сторінка запит відправить,
+    а заголовок до нього не додасть. */
+async function dashApi(path, opts = {}) {
+  const r = await fetch(DASH_AUTH_URL + path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(getDashSession() ? { Authorization: 'Bearer ' + getDashSession() } : {}),
+      ...(opts.headers || {}),
+    },
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const e = new Error(d.error || ('HTTP ' + r.status));
+    e.status = r.status;
+    throw e;
+  }
+  return d;
+}
+
+/** Тихий обмін сесії на свіжий токен проксі. Без нього пароль питався б щодня:
+    токен проксі живе 12 годин, а сесія — 30 днів. */
+async function remintProxyToken() {
+  if (!getDashSession()) return false;
+  try {
+    saveDashPasses(await dashApi('/token', { method: 'POST' }));
+    return true;
+  } catch (e) {
+    // 401 тут означає «доступ відкликали або сесія прострочена» — сесію геть,
+    // інакше кожен запит ходив би за токеном, якого вже не дадуть.
+    if (e.status === 401) dropDashSession();
+    return false;
+  }
+}
+
 /**
- * Форма входу: логін + пароль. `prompt` тут не годиться — він однопольний, а пароль
- * у ньому ще й видно на екрані. Повертає Promise з {login, password} або null.
+ * Форма входу: пошта + пароль. `prompt` тут не годиться — він однопольний, а пароль
+ * у ньому ще й видно на екрані. Повертає Promise з {email, password} або null.
  */
 function askCredentials() {
   return new Promise(resolve => {
@@ -6140,8 +6333,9 @@ function askCredentials() {
     back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
     back.innerHTML = `
       <form style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px;min-width:280px;max-width:92vw;display:flex;flex-direction:column;gap:12px">
-        <div style="font-weight:700;font-size:14px">Вхід до даних CRM</div>
-        <input name="login" placeholder="Логін" autocomplete="username"
+        <div style="font-weight:700;font-size:14px">Вхід до дашборда</div>
+        <div style="font-size:11px;color:var(--muted)">Пошта і пароль, які видав власник.</div>
+        <input name="email" type="email" placeholder="Пошта" autocomplete="username" spellcheck="false"
                style="padding:9px 11px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px">
         <input name="password" type="password" placeholder="Пароль" autocomplete="current-password"
                style="padding:9px 11px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px">
@@ -6156,18 +6350,18 @@ function askCredentials() {
     back.querySelector('form').onsubmit = e => {
       e.preventDefault();
       const f = e.target;
-      const login = f.login.value.trim(), password = f.password.value;
-      if (!login || !password) return;
-      done({ login, password });
+      const email = f.email.value.trim().toLowerCase(), password = f.password.value;
+      if (!email || !password) return;
+      done({ email, password });
     };
     document.addEventListener('keydown', onEsc);
     document.body.appendChild(back);
-    back.querySelector('[name=login]').focus();
+    back.querySelector('[name=email]').focus();
   });
 }
 
 /**
- * Запитати логін/пароль і зберегти токен. Повертає true, якщо токен отримано.
+ * Запитати пошту/пароль і зберегти пропуски. Повертає true, якщо токен отримано.
  * quiet=true — не чіпати користувача (фонові спроби на старті).
  */
 async function proxyLogin(proxyUrl, quiet) {
@@ -6175,19 +6369,36 @@ async function proxyLogin(proxyUrl, quiet) {
   const cr = await askCredentials();
   if (!cr) return false;
   try {
+    saveDashPasses(await dashApi('/login', { method: 'POST', body: JSON.stringify(cr) }));
+    return true;
+  } catch (e) {
+    // Пароль не підійшов — так і кажемо. А от «воркер не відповів» (мережа, 5xx або
+    // 404, коли воркер із цим маршрутом ще не розгорнутий) це не відмова у доступі:
+    // лишається друга хвіртка — вхід у сам проксі за DASH_USERS.
+    if (e.status && e.status < 500 && e.status !== 404) { alert(e.message); return false; }
+    return await proxyLoginDirect(proxyUrl, cr);
+  }
+}
+
+/** Друга хвіртка: вхід у сам проксі за списком DASH_USERS у змінних Render.
+    Нею власник дістане дані, якщо воркер доступів недоступний. Сесії тут немає —
+    значить і панелі доступів не буде, поки воркер не відповідає. */
+async function proxyLoginDirect(proxyUrl, cr) {
+  try {
     const r = await fetch(proxyUrl + '/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-      body: JSON.stringify(cr),
+      body: JSON.stringify({ login: cr.email, password: cr.password }),
     });
     const d = await r.json().catch(() => ({}));
     if (r.ok && d.t) {
       localStorage.setItem(PROXY_TOKEN_KEY, d.t);
+      dropDashSession();
       return true;
     }
     alert(d.message || ('Вхід не вдався: HTTP ' + r.status));
   } catch (e) {
-    alert('Проксі не відповів: ' + (e.message || 'помилка'));
+    alert('Ні воркер доступів, ні проксі не відповіли: ' + (e.message || 'помилка'));
   }
   return false;
 }
@@ -6200,8 +6411,93 @@ async function proxyFetch(proxyUrl, path, opts, quiet) {
   let r = await fetch(apiUrl(proxyUrl, path), opts);
   if (r.status !== 401) return r;
   localStorage.removeItem(PROXY_TOKEN_KEY);
-  if (!(await proxyLogin(proxyUrl, quiet))) return r;
+  // Спершу тихий обмін сесії, і лише потім пароль: інакше пароль питався б
+  // щоразу, коли догорів 12-годинний токен проксі.
+  if (!(await remintProxyToken()) && !(await proxyLogin(proxyUrl, quiet))) return r;
   return fetch(apiUrl(proxyUrl, path), opts);
+}
+
+// ─── Панель доступів: тільки власник ────────────────────────────────────────
+// Чужим відмовляє сам воркер (403 у src/dash.js), тут — щоб кнопки не було
+// видно тим, кому вона не потрібна. Власник пізнається по пошті: OWNER_EMAIL
+// у змінних воркера, у відповіді входу це owner:true.
+async function openAccess() {
+  const back = document.createElement('div');
+  back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
+  const btn = 'padding:6px 11px;border-radius:6px;border:1px solid var(--border);background:var(--surface3);color:var(--muted);font-size:11px;cursor:pointer';
+  back.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px;width:560px;max-width:94vw;max-height:84vh;overflow:auto;display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700;font-size:14px">Доступи до дашборда</div>
+        <button type="button" data-x="close" style="${btn}">Закрити</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.5">
+        Пароль придумує система і показує один раз: у базі лежить тільки хеш, повторно взяти його нізвідки.
+        Забув — тисніть «Новий пароль», старий одразу мертвий.
+        Відкликання доходить до даних не більше ніж за 12 годин — на стільки живе виданий токен.
+      </div>
+      <form data-x="form" style="display:flex;gap:8px">
+        <input name="email" type="email" placeholder="пошта співробітника" autocomplete="off" spellcheck="false"
+               style="flex:1;padding:8px 11px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px">
+        <button type="submit" style="padding:8px 13px;border-radius:6px;border:0;background:var(--accent);color:#0b1020;font-weight:700;font-size:12px;cursor:pointer">Видати доступ</button>
+      </form>
+      <div data-x="note" style="font-size:12px;min-height:18px;word-break:break-all"></div>
+      <div data-x="list" style="display:flex;flex-direction:column;gap:6px;font-size:12px"></div>
+    </div>`;
+  const q = sel => back.querySelector(sel);
+  const note = (html, bad) => { q('[data-x=note]').innerHTML = html; q('[data-x=note]').style.color = bad ? 'var(--lost)' : 'var(--muted)'; };
+  const close = () => { back.remove(); document.removeEventListener('keydown', onEsc); };
+  const onEsc = e => { if (e.key === 'Escape') close(); };
+
+  async function draw() {
+    try {
+      const d = await dashApi('/users');
+      q('[data-x=list]').innerHTML = d.users.map(u => {
+        const when = u.last_login_at ? 'вхід ' + String(u.last_login_at).slice(0, 10) : 'ще не входив';
+        const right = u.is_owner
+          ? '<span style="color:var(--muted);font-size:11px">власник · пароль у секреті воркера</span>'
+          : `<span style="display:flex;gap:6px">
+               <button type="button" style="${btn}" data-reset="${escHtml(u.email)}">Новий пароль</button>
+               <button type="button" style="${btn}" data-drop="${escHtml(u.email)}">Видалити</button></span>`;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface2)">
+            <span><strong>${escHtml(u.email)}</strong>
+              <span style="color:var(--muted);font-size:11px"> · ${escHtml(when)}</span></span>${right}</div>`;
+      }).join('');
+    } catch (e) {
+      q('[data-x=list]').innerHTML = '';
+      note('Список не читається: ' + escHtml(e.message), true);
+    }
+  }
+
+  async function issue(email) {
+    if (!email) return;
+    try {
+      const d = await dashApi('/users', { method: 'POST', body: JSON.stringify({ email }) });
+      // Пароль лишається на екрані до закриття вікна: другого разу його немає ніде.
+      note(`${escHtml(d.email)} — пароль <strong style="color:var(--text);font-size:14px">${escHtml(d.password)}</strong>`
+        + ' · скопіюйте зараз, другий раз він не покажеться');
+      q('[name=email]').value = '';
+      await draw();
+    } catch (e) {
+      note('Не вийшло: ' + escHtml(e.message), true);
+    }
+  }
+
+  q('[data-x=close]').onclick = close;
+  q('[data-x=form]').onsubmit = e => { e.preventDefault(); issue(q('[name=email]').value.trim().toLowerCase()); };
+  q('[data-x=list]').onclick = async e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.reset) return issue(b.dataset.reset);
+    if (b.dataset.drop) {
+      if (!confirm('Прибрати доступ ' + b.dataset.drop + '?')) return;
+      try { await dashApi('/users/' + encodeURIComponent(b.dataset.drop), { method: 'DELETE' }); note(''); await draw(); }
+      catch (err) { note('Не вийшло: ' + escHtml(err.message), true); }
+    }
+  };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(back);
+  await draw();
 }
 
 function saveCRMProxyUrl(val) {
@@ -6415,23 +6711,16 @@ async function startCRMSync(mode) {
         // її `updated_at` не менший за дату заявки, значить вона в відповіді є.
         // Старіше `since` не чистимо — живу угоду, якої три місяці не торкались,
         // інкремент не повертає, і чистка знесла б історію.
-        let _gone = 0;
-        // Проксі без `since` (ще не задеплоєний) — лишаємо йому старе правило:
-        // повне оновлення чистить усе 2026+, інкремент не чистить нічого.
-        const _since = String(msg.since || (isFullSync ? '2026-01-01' : ''));
-        if (_since) {
-          const seen = new Set();
-          [newActive, newLost, newWon].forEach(a => a.forEach(r => { if (r.id) seen.add(String(r.id)); }));
-          const _iso = r => { const p = String((r && r.date) || '').split(' ')[0].split('.');
-                              return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : ''; };
-          [_ma, _ml, _mw].forEach(m => Object.keys(m).forEach(id => {
-            if (!seen.has(String(id)) && _iso(m[id]) >= _since) { delete m[id]; _gone++; }
-          }));
-        }
         activeFileData.length = 0; lostFileData.length = 0; wonFileData.length = 0;
         Object.values(_ma).forEach(r => activeFileData.push(r));
         Object.values(_ml).forEach(r => lostFileData.push(r));
         Object.values(_mw).forEach(r => wonFileData.push(r));
+        // Проксі без `since` (ще не задеплоєний) — лишаємо йому старе правило:
+        // повне оновлення чистить усе 2026+, інкремент не чистить нічого.
+        // Саме правило — у `dropDeleted`, одне на синк і на старт.
+        const _since = String(msg.since || (isFullSync ? '2026-01-01' : ''));
+        const _gone = dropDeleted([activeFileData, lostFileData, wonFileData],
+                                  [newActive, newLost, newWon], _since);
 
         const fnA = document.getElementById('fn-active');
         const fnL = document.getElementById('fn-lost');

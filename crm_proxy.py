@@ -336,6 +336,9 @@ def sync_crm(mode: str, send_event):
         'won':        won_rows,
         'total':      len(active_rows) + len(lost_rows) + len(won_rows),
         'synced_at':  datetime.now(tz=timezone.utc).isoformat(),
+        # Межа повноти знімка — те саме поле, що в облачному проксі
+        # (crm_proxy_cloud.py): по ньому клієнт чистить видалені на старті.
+        'cache_since': CUT_DATE,
     }
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
