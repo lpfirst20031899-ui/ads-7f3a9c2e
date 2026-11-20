@@ -58,9 +58,8 @@ input[type=date]:focus{border-color:var(--accent)}
 .ms-item input[type=checkbox]{accent-color:var(--accent);cursor:pointer;width:13px;height:13px;flex-shrink:0}
 
 /* ─── KPIs ─── */
-/* Рівно 8 колонок на всю ширину — метрик у закріпленому рядку теж 8.
-   На auto-fill переходили 26.08, коли їх було 9 і в рядок вони не влазили;
-   оплати з рядка пішли — потреба відпала. */
+/* Фіксовані 7 колонок, не auto-fill: на auto-fill переходили 26.08, коли метрик
+   було 9 і в рядок вони не влазили. */
 .kpis{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;padding:16px 24px 0}
 @media(max-width:1300px){.kpis{grid-template-columns:repeat(4,1fr)}}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;position:relative;overflow:hidden}
@@ -543,7 +542,6 @@ tr:hover td{background:var(--surface2)}
     <div class="tab" data-tab="lands">Ленди</div>
     <div class="tab" data-tab="regions">Регіони</div>
     <div class="tab" data-tab="lost">Програні</div>
-    <div class="tab" data-tab="won">💰 Оплати</div>
     <div class="tab" data-tab="daily">📅 По днях</div>
     <div class="tab" data-tab="comments">🗒️ Коментарі</div>
     <div class="tab" data-tab="analyst">💡 Аналітик</div>
@@ -1079,34 +1077,6 @@ tr:hover td{background:var(--surface2)}
 
 </div>
 
-<!-- ===== WON / ОПЛАТИ ===== -->
-<div id="tc-won" class="tc">
-  <div class="tab-toolbar">
-    <div class="view-toggle" id="vt-won">
-      <button class="vt-btn active" onclick="setView('won','chart',this)">📊 Графік</button>
-      <button class="vt-btn" onclick="setView('won','table',this)">☰ Список</button>
-    </div>
-  </div>
-  <div id="won-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px"></div>
-  <div id="v-won-chart">
-    <div class="g2">
-      <div class="cc"><div class="cc-title">Оплати — по менеджерах</div><div class="cc-sub">Рейтинг: хто закрив найбільше продажів за період</div><div style="height:360px"><canvas id="c-won-mgr"></canvas></div></div>
-      <div class="cc"><div class="cc-title">Оплати — по кампаніях</div><div class="cc-sub">Топ-10 кампаній за кількістю продажів</div><div style="height:360px"><canvas id="c-won-camp"></canvas></div></div>
-    </div>
-    <div class="g2">
-      <div class="cc"><div class="cc-title">Оплати — по адсетах</div><div class="cc-sub">Топ-10 адсетів за кількістю продажів</div><div style="height:360px"><canvas id="c-won-adset"></canvas></div></div>
-      <div class="cc"><div class="cc-title">Оплати — по крео</div><div class="cc-sub">Топ-10 крео за кількістю продажів</div><div style="height:360px"><canvas id="c-won-creo"></canvas></div></div>
-    </div>
-    <div class="g1">
-      <div class="cc"><div class="cc-title">Динаміка оплат по тижнях</div><div class="cc-sub">Кількість оплачених угод (не прив'язано до фільтру дат)</div><div style="height:260px"><canvas id="c-won-timeline"></canvas></div></div>
-    </div>
-  </div>
-  <div id="v-won-table" style="display:none">
-    <div class="cc"><div class="cc-title">Оплати — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="tbl-won"></div></div>
-  </div>
-</div>
-
-
 <!-- ===== DAILY ===== -->
 <div id="tc-daily" class="tc">
 <style>
@@ -1353,7 +1323,7 @@ function applyAdAliases() {
     const c = adAliasResolve(v);
     if (c !== v) { r[f] = c; n++; }
   };
-  [activeFileData, lostFileData, wonFileData].forEach(arr =>
+  [activeFileData, lostFileData].forEach(arr =>
     (arr || []).forEach(r => { fix(r, 'campaign'); fix(r, 'adset'); fix(r, 'creo'); }));
   if (typeof aliasCostRows === 'function') aliasCostRows(fix);
   return n;
@@ -1386,7 +1356,7 @@ function _fbStatusStore() {
   return _fbStatusCache;
 }
 
-// Квота localStorage (~5 МБ) одна на весь дашборд, і ліди (ads_active/ads_lost/ads_won)
+// Квота localStorage (~5 МБ) одна на весь дашборд, і ліди (ads_active/ads_lost)
 // з'їдають більшу її частину — звідси падіння «exceeded the quota» на кнопці «Статуси FB».
 // Кеш статусів — не дані, а прискорювач, тому пишемо best-effort: не вліз — викидаємо
 // рівень (крео матчиться найгірше, далі адсети). У пам'яті лишається повний набір,
@@ -1457,7 +1427,7 @@ Chart.defaults.plugins.tooltip.bodyColor='#9ba5c5';
 
 // ─── State ─────────────────────────────────────────────
 let activeTab = 'overview';
-const tabView = {campaigns:'table',adsets:'table',creos:'table',managers:'table',lands:'table',lost:'chart',won:'chart'};
+const tabView = {campaigns:'table',adsets:'table',creos:'table',managers:'table',lands:'table',lost:'chart'};
 const registry = {};
 
 // sort state per table
@@ -1555,8 +1525,6 @@ loadUIState();
 // ─── Separate active/lost stores + filenames ───────────
 let activeFileData = [];
 let lostFileData   = [];
-let wonFileData    = []; // Реалізація funnel (paid deals)
-const WON_DATA     = [];
 
 // ─── Multi-select state ────────────────────────────────
 const MS = {
@@ -1852,27 +1820,6 @@ function filterData() {
   });
 }
 
-// Оплати (won) фільтруються тими самими фільтрами, ЩО Й ліди — по даті ЗАЯВКИ (r.date вже = дата заявки).
-// Категорію/статус не застосовуємо (усі won). Так «Оплати» й конверсія реагують на період і фільтри.
-function filterWon() {
-  const from   = parseISO(document.getElementById('f-from').value);
-  const toBase = parseISO(document.getElementById('f-to').value);
-  const to     = toBase ? new Date(toBase.getFullYear(), toBase.getMonth(), toBase.getDate()+1) : null;
-  return WON_DATA.filter(r => {
-    const d = parseDate(r.date);
-    if (!d) return false;
-    if (from && d < from) return false;
-    if (to   && d >= to)  return false;
-    if (MS.manager.selected.size   && !MS.manager.selected.has(r.manager))                     return false;
-    if (MS.user.selected.size      && !adUserMatch(r.campaign, MS.user.selected))              return false;
-    if (MS.campaign.selected.size  && !MS.campaign.selected.has(r.campaign))                   return false;
-    if (MS.adset.selected.size     && !MS.adset.selected.has(r.adset))                         return false;
-    if (MS.creo.selected.size      && !MS.creo.selected.has(r.creo))                           return false;
-    if (MS.ad_funnel.selected.size && !MS.ad_funnel.selected.has(r.ad_funnel||'Не вказано'))   return false;
-    return true;
-  });
-}
-
 // ─── Grouping ──────────────────────────────────────────
 // Дубль — програна угода з причиною «Дубль»; решта — унікальні ліди.
 function isDup(r) { return (r.reason||'').trim().toLowerCase() === 'дубль'; }
@@ -1976,7 +1923,7 @@ function makeDonut(id,labels,values,colors){
 }
 
 // Горизонтальні стовпчики: довгі назви кампаній/адсетів читаються, вертикальні їх обрізають.
-// precision:0 — усі значення тут штучні (угоди, ліди), «1.5 оплати» на осі бути не може.
+// precision:0 — на осі тільки цілі: «1.5 заявки» не буває.
 function makeHBar(id,labels,values,color,label){
   const ctx=freshCanvas(id); if(!ctx) return;
   const total = values.reduce((a,b)=>a+b,0);
@@ -2123,7 +2070,6 @@ function renderByTab(d, tab) {
     case 'lands':     renderLands(d);     break;
     case 'regions':   renderRegions(d);   break;
     case 'lost':      renderLost(d);      break;
-    case 'won':       renderWon(filterWon());break;
     case 'daily':     renderDaily(d);     break;
     case 'comments':  renderComments(d);  break;
     case 'analyst':   renderAnalyst(d);   break;
@@ -2145,7 +2091,6 @@ function renderKPIs(d) {
   // кожна заявка рахується рівно раз і категорії зі станами дають «Всього».
   const cNone=d.filter(r=>normCat(r.category,r.status,r.id)==='none').length;
   const cAct=d.filter(r=>r.status==='active').length, cLost=d.filter(r=>r.status==='lost').length;
-  // Оплати навмисно НЕ тут: закріплений рядок — про якість лідів, а оплати живуть у вкладці «💰 Оплати».
   document.getElementById('kpis').innerHTML=[
     {l:'Всього лідів',  v:t,       s:'у вибірці',            kc:'var(--accent)'},
     {l:'Категорія A',   v:cA,      s:pct(cA,t)+' від усіх',  kc:'var(--a)'},
@@ -2210,14 +2155,6 @@ function renderRegions(d) {
     if (r.category === 'A') aMap[r._reg] = (aMap[r._reg] || 0) + 1;
     if (r.status === 'lost') lostMap[r._reg] = (lostMap[r._reg] || 0) + 1;
   });
-  // Оплати живуть окремо від лідів (WON_DATA) і мають свій фільтр — той самий, що у
-  // вкладці «Оплати». Дата в них — дата ЗАЯВКИ, тож ціна оплати ділиться на витрати
-  // того ж періоду й не «їде» на місяць уперед.
-  const wonMap = {};
-  filterWon().forEach(r => {
-    const g = String(r.region || '').trim() && geoRegion(r.region);
-    if (g) wonMap[g] = (wonMap[g] || 0) + 1;
-  });
   // Через normCat, як і всі інші розрізи: «Без кат.» означає рівно те саме, що в
   // закріпленій плитці — програна заявка, якій категорію так і не поставили (Артем,
   // 04.11.2026). Доти тут було власне правило «усе без категорії», і колонка «Без кат.»
@@ -2230,7 +2167,7 @@ function renderRegions(d) {
     if (isDup(r)) map[k].dup++;
   });
   renderDimTable('tbl-regions', 'regions', map, spendMap, aMap,
-                 Object.keys(spendMap).length > 0, null, null, {lost: lostMap, won: wonMap});
+                 Object.keys(spendMap).length > 0, null, null, {lost: lostMap});
   renderRegionSources(rows);
 }
 
@@ -2377,9 +2314,6 @@ function renderOverview(d) {
   const cplND = (totalSpend && leadsNoDup) ? totalSpend / leadsNoDup : 0;
   const cplA  = (totalSpend && totalA)     ? totalSpend / totalA     : 0;
   const cplB  = (totalSpend && totalB)     ? totalSpend / totalB     : 0;
-  // Ціна продажу = скільки реклами пішло на одну оплату (витрати ÷ кількість оплат за період).
-  const cWonOv = filterWon().length;
-  const cps    = (totalSpend && cWonOv) ? totalSpend / cWonOv : 0;
   const spEl = document.getElementById('ov-spend-stats');
   if (spEl) spEl.innerHTML = [
     {l:'Загальні витрати',    v: totalSpend ? '$'+Math.round(totalSpend).toLocaleString('en-US') : '—', s: sd.length ? (_spendFiltered ? 'за вибраними фільтрами' : 'по всіх кампаніях і кабінетах') : 'завантаж файл витрат', kc:'var(--spend)'},
@@ -2388,7 +2322,6 @@ function renderOverview(d) {
     {l:'Ціна ліда без дублів',v: cplND? '$'+cplND.toFixed(1): '—', s: leadsNoDup+' унікальних лідів', kc:'var(--cpl)'},
     {l:'Ціна ліда A (CPL-A)', v: cplA ? '$'+cplA.toFixed(1) : '—', s: totalA+' A-лідів у вибірці',   kc:'var(--a)'},
     {l:'Ціна ліда B (CPL-B)', v: cplB ? '$'+cplB.toFixed(1) : '—', s: totalB+' B-лідів у вибірці',   kc:'var(--b)'},
-    {l:'Ціна продажу',        v: cps  ? '$'+Math.round(cps).toLocaleString('en-US') : '—', s: cWonOv+' оплат · витрати÷оплати', kc:'var(--a)'},
   ].map(k=>`<div class="kpi" style="--kc:${k.kc}"><div class="kpi-label">${k.l}</div><div class="kpi-value">${k.v}</div><div class="kpi-sub">${k.s}</div></div>`).join('');
 
   const cats=ALL_CATS;
@@ -3185,9 +3118,9 @@ function makeDimTable(containerId, cols, rows, stateKey, lbl) {
 
 // Shared dimension table (campaigns / adsets / creos / managers)
 // spendMap: {name -> totalSpend}  aMap: {name -> A-leads}  w7: {lbl, map, spend} за 7 днів — optional
-// extra — необов'язкові карти {lost, won} по назві розрізу: домальовує «Програні»,
-// «Програні %», «Оплати» і «Ціна оплати». Потрібне поки лише в областях, тому не
-// вбудовано в groupCat: там кошик — категорії, а не статуси.
+// extra — необов'язкова карта {lost} по назві розрізу: домальовує «Програні» і
+// «Програні %». Потрібне поки лише в областях, тому не вбудовано в groupCat:
+// там кошик — категорії, а не статуси.
 function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=false, statusMap=null, w7=null, extra=null) {
   const hasSpend = forceSpend || (spendMap && Object.keys(spendMap).length > 0);
   const nk = s => (s||'').trim().toLowerCase();
@@ -3198,11 +3131,10 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     const aLeads = aMap?.[name] || 0;
     const bLeads = v.B||0;
     const uniq = t - (v.dup||0);
-    const lostN = extra?.lost?.[name] || 0, wonN = extra?.won?.[name] || 0;
+    const lostN = extra?.lost?.[name] || 0;
     return {name, total:t, A:v.A||0, B:v.B||0, C:v.C||0, none:non, unproc:unp,
             noanswer:nans, work:wrk,
-            lostN, wonN, pLost: t ? +(lostN/t*100).toFixed(1) : 0,
-            cpo: (wonN && sp) ? sp/wonN : 0,
+            lostN, pLost: t ? +(lostN/t*100).toFixed(1) : 0,
             pA:t?+(v.A/t*100).toFixed(1):0, pB:t?+(v.B/t*100).toFixed(1):0,
             pC:t?+(v.C/t*100).toFixed(1):0, pN:t?+(non/t*100).toFixed(1):0,
             pU:t?+(unp/t*100).toFixed(1):0, pNa:t?+(nans/t*100).toFixed(1):0,
@@ -3231,10 +3163,8 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
   ];
   if (extra) {
     const tLost = 'Скільки заявок області вже закрито. Це НЕ окрема категорія: програна заявка з категорією A рахується і в «A», і тут.';
-    const tWon  = 'Скільки оплат прийшло з області. Теж підмножина: оплачена заявка вже порахована у своїй категорії.';
     cols.push({key:'lostN', label:`<span title="${tLost}">З них програні</span>`, sep:true, fn:r=>`<span style="color:var(--lost)">${r.lostN}</span>`},
-              {key:'pLost', label:`<span title="${tLost}">Програні %</span>`,              fn:r=>barCell(r.lostN, r.pLost, 'var(--lost)')},
-              {key:'wonN',  label:`<span title="${tWon}">З них оплати</span>`,             fn:r=>`<span style="color:var(--a);font-weight:700">${r.wonN}</span>`});
+              {key:'pLost', label:`<span title="${tLost}">Програні %</span>`,              fn:r=>barCell(r.lostN, r.pLost, 'var(--lost)')});
   }
   if (hasSpend) {
     cols.push({key:'sp',   label:'Витрати $', sep:true,  fn:r=>spendCell(r.sp)});
@@ -3243,7 +3173,6 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     cols.push({key:'cplA', label:'CPL A $',             fn:r=>cplACell(r.cplA)});
     cols.push({key:'cplB', label:'CPL B $',             fn:r=>cplACell(r.cplB,'var(--b)')});
   }
-  if (extra && hasSpend) cols.push({key:'cpo', label:'Ціна оплати $', fn:r=>cplACell(r.cpo)});
   makeDimTable(containerId, cols, rows, stateKey, w7 ? w7.lbl : '');
 }
 
@@ -3976,8 +3905,6 @@ function mergeData() {
   DATA.length = 0;
   activeFileData.forEach(r => { if (!isExcludedLead(r)) DATA.push(r); });
   lostFileData.forEach(r => { if (!isExcludedLead(r)) DATA.push(r); });
-  WON_DATA.length = 0;
-  wonFileData.forEach(r => { if (!isExcludedLead(r)) WON_DATA.push(r); });
   rebuildDeps();
 
   // persist to localStorage
@@ -3986,7 +3913,6 @@ function mergeData() {
     localStorage.setItem('ads_lost',   JSON.stringify(lostFileData));
     localStorage.setItem('ads_fn_active', document.getElementById('fn-active').textContent);
     localStorage.setItem('ads_fn_lost',   document.getElementById('fn-lost').textContent);
-    localStorage.setItem('ads_won',   JSON.stringify(wonFileData));
   } catch(e) {}
   const dates = DATA.map(r => { try { const[dd,mm,yyyy]=r.date.split(' ')[0].split('.'); return new Date(+yyyy,+mm-1,+dd); } catch { return null; } }).filter(Boolean).sort((a,b)=>a-b);
   if (dates.length) {
@@ -5934,17 +5860,14 @@ function dropDeleted(lists, fresh, since) {
   return gone;
 }
 
-function applyRestoredCRMData(active, lost, won) {
+function applyRestoredCRMData(active, lost) {
   activeFileData = active || [];
   lostFileData   = lost   || [];
-  wonFileData    = won    || [];
   applyAdAliases();    // те саме зведення назв, що після синку
   applyNoteFreeze();   // обчислюємо r.main_note і на старті (не лише після синку)
   DATA.length = 0;
   activeFileData.forEach(r => { if (!isExcludedLead(r)) DATA.push(r); });
   lostFileData.forEach(r => { if (!isExcludedLead(r)) DATA.push(r); });
-  WON_DATA.length = 0;
-  wonFileData.forEach(r => { if (!isExcludedLead(r)) WON_DATA.push(r); });
   const cnt = activeFileData.length + lostFileData.length;
   if (cnt) {
     const fnA = document.getElementById('fn-active');
@@ -5978,23 +5901,26 @@ function applyRestoredCRMData(active, lost, won) {
      знімок із проксі (/api/data), тому для того, хто пароль знає, втрата — один запит. */
   const _dropLeads = () => {
     ['ads_active', 'ads_lost', 'ads_won'].forEach(k => localStorage.removeItem(k));
-    applyRestoredCRMData([], [], []);
+    applyRestoredCRMData([], []);
   };
   if (_bootCloud && !getDashSession() && !getProxyToken()) {
     _dropLeads();
     await proxyLogin(_bootProxy);
   }
 
+  // Оплати з дашборда прибрані (Артем, 20.11.2026). Ключ знімаємо на старті: у браузерах,
+  // що вже синхронізувались, він лежить мертвим і тримає під мегабайт квоти localStorage,
+  // якої не хватало іншим кешам.
+  localStorage.removeItem('ads_won');
+
   // 1. Спочатку відновлюємо з localStorage (миттєво — не чекаємо сервер)
   try {
     const sa = localStorage.getItem('ads_active');
     const sl = localStorage.getItem('ads_lost');
-    const sw = localStorage.getItem('ads_won');
     const active = sa ? JSON.parse(sa) : [];
     const lost   = sl ? JSON.parse(sl) : [];
-    const won    = sw ? JSON.parse(sw) : [];
     if (active.length || lost.length) {
-      applyRestoredCRMData(active, lost, won);
+      applyRestoredCRMData(active, lost);
       restored = true;
       const ts = localStorage.getItem('crm_last_sync_ts');
       if (ts) {
@@ -6050,9 +5976,9 @@ function applyRestoredCRMData(active, lost, won) {
               (snap  || []).forEach(x => { if (x && x.id != null) m.set(String(x.id), x); else out.push(x); });
               return [...m.values(), ...out];
             };
-            const lists = [byId(activeFileData, d.active), byId(lostFileData, d.lost), byId(wonFileData, d.won)];
-            const gone = dropDeleted(lists, [d.active, d.lost, d.won], String(d.cache_since || ''));
-            activeFileData = lists[0]; lostFileData = lists[1]; wonFileData = lists[2];
+            const lists = [byId(activeFileData, d.active), byId(lostFileData, d.lost)];
+            const gone = dropDeleted(lists, [d.active, d.lost], String(d.cache_since || ''));
+            activeFileData = lists[0]; lostFileData = lists[1];
             /* mergeData, а не applyRestoredCRMData: заодно перезаписує
                localStorage — інакше зняті заявки повернулись би на наступному
                відкритті сторінки. */
@@ -6090,120 +6016,6 @@ function applyRestoredCRMData(active, lost, won) {
 
   if (drpStart) drpApply(); else render();
 })();
-
-
-// ─── Won / Оплати ──────────────────────────────────────────────────
-// Сума витрат FB за поточний період і фільтри (та сама логіка, що в «Огляд»).
-function getFilteredSpendTotal() {
-  const fromISO = document.getElementById('f-from').value;
-  const toISO   = document.getElementById('f-to').value;
-  const _nk = v => (v||'').trim().toLowerCase();
-  const _selCamp  = MS.campaign.selected.size ? new Set([...MS.campaign.selected].map(_nk)) : null;
-  const _selAdset = MS.adset.selected.size    ? new Set([...MS.adset.selected].map(_nk))    : null;
-  const _selCreo  = MS.creo.selected.size     ? new Set([...MS.creo.selected].map(_nk))     : null;
-  return getSpendData().filter(s => {
-    if (fromISO && s.date < fromISO) return false;
-    if (toISO   && s.date > toISO)   return false;
-    const nc=_nk(s.campaign), na=_nk(s.adset), ncr=_nk(s.ad);
-    if (_selCamp  && !(_selCamp.has(nc)||_selCamp.has(na))) return false;
-    if (_selAdset && !_selAdset.has(na)) return false;
-    if (_selCreo  && !_selCreo.has(ncr)) return false;
-    return true;
-  }).reduce((a,s)=>a+(s.spend||0),0);
-}
-
-function renderWon(d) {
-  if (!d || !d.length) {
-    const kpiEl = document.getElementById('won-kpis');
-    if (kpiEl) kpiEl.innerHTML = '<div class="kpi" style="--kc:var(--muted);grid-column:1/-1"><div class="kpi-label">Дані по оплатах відсутні</div><div class="kpi-sub">Синхронізуй CRM — угоди воронки «Реалізація» завантажаться автоматично</div></div>';
-    return;
-  }
-
-  // ── KPIs ───────────────────────────────────────────────────────
-  const kpiEl = document.getElementById('won-kpis');
-  if (kpiEl) {
-    const hasCamp  = d.filter(r => r.campaign && r.campaign !== 'Не вказано').length;
-    const stages   = [...new Set(d.map(r=>r.stage).filter(Boolean))];
-    // Ціна продажу = витрати за період ÷ кількість оплат (те саме, що в «Огляд»).
-    const spendW = getFilteredSpendTotal();
-    const cpsW   = (spendW && d.length) ? spendW / d.length : 0;
-    // Конверсія рахується від лідів того самого періоду/фільтрів — раніше жила в закріпленому рядку.
-    const leadsW = filterData().length;
-    const topMgr = Object.entries(d.reduce((m,r)=>{const k=r.manager||'Невідомо';m[k]=(m[k]||0)+1;return m;},{}))
-                     .sort((a,b)=>b[1]-a[1])[0];
-    kpiEl.innerHTML = `
-      <div class="kpi" style="--kc:var(--a)"><div class="kpi-label">Кількість оплат</div><div class="kpi-value">${d.length}</div><div class="kpi-sub">${pct(d.length, leadsW)} конверсія ліда в оплату</div></div>
-      <div class="kpi" style="--kc:var(--b)"><div class="kpi-label">Ціна продажу</div><div class="kpi-value">${cpsW ? '$'+Math.round(cpsW).toLocaleString('en-US') : '—'}</div><div class="kpi-sub">витрати÷оплати за період</div></div>
-      <div class="kpi" style="--kc:var(--active)"><div class="kpi-label">Топ менеджер</div><div class="kpi-value" style="font-size:20px">${topMgr ? escHtml(topMgr[0]) : '—'}</div><div class="kpi-sub">${topMgr ? topMgr[1]+' оплат · '+pct(topMgr[1], d.length)+' усіх продажів' : '—'}</div></div>
-      <div class="kpi" style="--kc:var(--accent)"><div class="kpi-label">З рекламними даними</div><div class="kpi-value">${hasCamp}</div><div class="kpi-sub">${d.length ? Math.round(hasCamp/d.length*100) : 0}% угод з кампанією</div></div>
-      <div class="kpi" style="--kc:var(--c)"><div class="kpi-label">Етапів реалізації</div><div class="kpi-value">${stages.length}</div><div class="kpi-sub">${stages.slice(0,2).join(', ')}${stages.length>2?'…':''}</div></div>
-    `;
-  }
-
-  if (tabView.won === 'chart') {
-    // Всі чотири зрізи — один горизонтальний рейтинг: хто/що дало більше продажів, зверху вниз.
-    // Раніше тут був вертикальний bar з кольором виду C.A+'cc' — а C.A це rgba(), тож 'rgba(…)cc'
-    // не парситься і Chart.js малював чорні стовпці.
-    const rank = (field, fb, limit) => {
-      const m = {};
-      d.forEach(r => { const k = (r[field]||'').toString().trim() || fb; m[k]=(m[k]||0)+1; });
-      const e = Object.entries(m).sort((a,b)=>b[1]-a[1]);
-      return limit ? e.slice(0,limit) : e;
-    };
-
-    // shortCamp тут замало: він лишає «дата · банк», а дві кампанії того ж банку стають
-    // нерозрізненними. Горизонтальні смуги дають місце на третій сегмент (продукт),
-    // а повну назву показує підказка.
-    const wonCampLabel = s => {
-      if (!s || s === 'Не вказано') return s || 'Не вказано';
-      const p = s.split('|').map(x=>x.trim()).filter(Boolean);
-      return p.length >= 2 ? p.slice(1,4).join(' · ') : s;
-    };
-    const campE = rank('campaign','Не вказано',10);
-    makeHBar('c-won-camp', campE.map(([k])=>wonCampLabel(k)), campE.map(([,v])=>v), C.A, 'Оплат');
-
-    const mgrE = rank('manager','Невідомо');
-    makeHBar('c-won-mgr', mgrE.map(([k])=>k), mgrE.map(([,v])=>v), C.B, 'Оплат');
-
-    const adsetE = rank('adset','Не вказано',10);
-    makeHBar('c-won-adset', adsetE.map(([k])=>k), adsetE.map(([,v])=>v), 'rgba(34,211,238,.82)', 'Оплат');
-
-    const creoE = rank('creo','Не вказано',10);
-    makeHBar('c-won-creo', creoE.map(([k])=>k), creoE.map(([,v])=>v), 'rgba(244,114,182,.82)', 'Оплат');
-
-    // ── Weekly timeline ───────────────────────────────────────────
-    const ww = {};
-    d.forEach(r => {
-      const dt = parseDate(r.date); if (!dt) return;
-      const dow = (dt.getDay()+6)%7;
-      const mon = new Date(dt.getTime() - dow*86400000);
-      const k = mon.getFullYear()+'-'+String(mon.getMonth()+1).padStart(2,'0')+'-'+String(mon.getDate()).padStart(2,'0');
-      ww[k] = (ww[k]||0)+1;
-    });
-    const weeks = Object.keys(ww).sort();
-    const wl    = weeks.map(w => { const p=w.split('-'); return p[2]+'.'+p[1]; });
-    const tlCtx = freshCanvas('c-won-timeline');
-    if (tlCtx) {
-      makeLine('c-won-timeline', wl, [{
-        label:'Оплати', data:weeks.map(w=>ww[w]||0),
-        borderColor:C.A, backgroundColor:'rgba(74,222,128,.13)', tension:.35, pointRadius:3, fill:true, borderWidth:2.5
-      }]);
-    }
-
-  } else {
-    // ── Table view ────────────────────────────────────────────────
-    const cols = [
-      {key:'date',     label:'Дата',       fn:r=>`<span style="color:var(--muted);font-size:11px">${r.date}</span>`},
-      {key:'manager',  label:'Менеджер',   fn:r=>`<strong>${r.manager||'—'}</strong>`},
-      {key:'stage',    label:'Етап',       fn:r=>`<span style="color:var(--accent)">${r.stage||'—'}</span>`},
-      {key:'category', label:'Кат.',       fn:r=>r.category?`<span style="color:var(--${r.category.toLowerCase()});font-weight:700">${r.category}</span>`:'<span style="color:var(--border)">—</span>'},
-      {key:'campaign', label:'Кампанія',   fn:r=>`<span style="font-size:11px">${escHtml(r.campaign||'—')}</span>`},
-      {key:'adset',    label:'Адсет',      fn:r=>`<span style="font-size:11px">${escHtml(r.adset||'—')}</span>`},
-      {key:'creo',     label:'Крео',       fn:r=>`<span style="font-size:11px">${escHtml(r.creo||'—')}</span>`},
-    ];
-    makeTable('tbl-won', cols, d, 'won');
-  }
-}
 
 
 // ══════════════════════════════════════════════════════════
@@ -6704,7 +6516,7 @@ async function startCRMSync(mode) {
   }
   const sep = syncParam.includes('?') ? '&' : '?';
   // Акумулятори для SSE-чанків (дані йдуть прямо в потоці — без /api/data запиту)
-  const _sseActive = [], _sseLost = [], _sseWon = [];
+  const _sseActive = [], _sseLost = [];
   const es = new EventSource(apiUrl(proxyUrl, '/api/sync' + syncParam + sep + 'ngrok-skip-browser-warning=true'));
 
   es.onmessage = function(e) {
@@ -6720,7 +6532,7 @@ async function startCRMSync(mode) {
       // Акумуляція SSE-чанків з даними (без окремого /api/data запиту)
       if (msg.type === 'data_active') { _sseActive.push(...(msg.rows||[])); return; }
       if (msg.type === 'data_lost')   { _sseLost.push(...(msg.rows||[]));   return; }
-      if (msg.type === 'data_won')    { _sseWon.push(...(msg.rows||[]));    return; }
+      // data_won проксі ще надсилає — дашборд оплати не рахує, чанк просто ігнорується.
 
       if (msg.type === 'done_signal') {
         es.close();
@@ -6728,7 +6540,6 @@ async function startCRMSync(mode) {
 
         const newActive = _sseActive;
         const newLost   = _sseLost;
-        const newWon    = _sseWon;
         const _srvTotal = (msg.active_count || 0) + (msg.lost_count || 0);
 
         // Якщо SSE-чанки не прийшли (старий сервер), але сервер обробив записи
@@ -6738,12 +6549,11 @@ async function startCRMSync(mode) {
           fetch(getCRMProxyUrl() + '/api/data')   // без custom headers → простий CORS GET, без preflight
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(d => {
-              const na = d.active || [], nl = d.lost || [], nw = d.won || [];
+              const na = d.active || [], nl = d.lost || [];
               if (na.length + nl.length === 0) throw new Error('порожня відповідь');
-              activeFileData.length = 0; lostFileData.length = 0; wonFileData.length = 0;
+              activeFileData.length = 0; lostFileData.length = 0;
               na.forEach(r => activeFileData.push(r));
               nl.forEach(r => lostFileData.push(r));
-              nw.forEach(r => wonFileData.push(r));
               const fnA = document.getElementById('fn-active');
               const fnL = document.getElementById('fn-lost');
               if (fnA) { fnA.textContent = 'CRM (' + activeFileData.length + ')'; fnA.title = 'Синхронізовано'; }
@@ -6753,7 +6563,7 @@ async function startCRMSync(mode) {
               localStorage.setItem('crm_last_sync_ts',    Date.now().toString());
               localStorage.setItem('crm_last_sync_count', total2.toString());
               updateLastSyncDisplay();
-              setCRMStatus('✓ ' + total2 + ' угод' + (wonFileData.length ? ' · ' + wonFileData.length + ' оплат' : ''), 'var(--a)');
+              setCRMStatus('✓ ' + total2 + ' угод', 'var(--a)');
               setCRMProgress(100); setTimeout(() => setCRMProgress(-1), 2000); enableSyncBtns();
               stSyncStates();
               landSyncVisits();
@@ -6766,16 +6576,13 @@ async function startCRMSync(mode) {
           return;
         }
 
-        // Cross-bucket merge: won-записи зберігаються ОКРЕМО від active/lost
-        // щоб реалізаційні угоди (ті ж id, але дата продажу) не витісняли лід з DATA
-        // ponytail: три окремих мапи замість одного _all
-        const _ma = {}, _ml = {}, _mw = {};
+        // Дві окремі мапи: заявка переходить з active в lost і назад, і мердж по id
+        // мусить прибрати її з попереднього кошика, інакше вона порахується двічі.
+        const _ma = {}, _ml = {};
         activeFileData.forEach(r => { if (r.id) _ma[r.id] = r; });
         lostFileData.forEach(r =>   { if (r.id) _ml[r.id] = r; });
-        wonFileData.forEach(r =>    { if (r.id) _mw[r.id] = r; });
         newActive.forEach(r => { if (r.id) { _ma[r.id] = r; delete _ml[r.id]; } });
         newLost.forEach(r =>   { if (r.id) { _ml[r.id] = r; delete _ma[r.id]; } });
-        newWon.forEach(r =>    { if (r.id) _mw[r.id] = r; });
         // Видалену в CRM угоду мердж по id сам не прибирає — вона жила в localStorage
         // вічно (так у статистику лізли видалені тестові заявки). Потрібні заявки Артем
         // не видаляє, а переводить у статус або в програні, тому все, чого в відповіді
@@ -6785,16 +6592,15 @@ async function startCRMSync(mode) {
         // її `updated_at` не менший за дату заявки, значить вона в відповіді є.
         // Старіше `since` не чистимо — живу угоду, якої три місяці не торкались,
         // інкремент не повертає, і чистка знесла б історію.
-        activeFileData.length = 0; lostFileData.length = 0; wonFileData.length = 0;
+        activeFileData.length = 0; lostFileData.length = 0;
         Object.values(_ma).forEach(r => activeFileData.push(r));
         Object.values(_ml).forEach(r => lostFileData.push(r));
-        Object.values(_mw).forEach(r => wonFileData.push(r));
         // Проксі без `since` (ще не задеплоєний) — лишаємо йому старе правило:
         // повне оновлення чистить усе 2026+, інкремент не чистить нічого.
         // Саме правило — у `dropDeleted`, одне на синк і на старт.
         const _since = String(msg.since || (isFullSync ? '2026-01-01' : ''));
-        const _gone = dropDeleted([activeFileData, lostFileData, wonFileData],
-                                  [newActive, newLost, newWon], _since);
+        const _gone = dropDeleted([activeFileData, lostFileData],
+                                  [newActive, newLost], _since);
 
         const fnA = document.getElementById('fn-active');
         const fnL = document.getElementById('fn-lost');
@@ -6808,8 +6614,7 @@ async function startCRMSync(mode) {
         localStorage.setItem('crm_last_sync_count', total.toString());
         updateLastSyncDisplay();
 
-        const wonCnt = wonFileData.length;
-        const label = '✓ ' + total + ' угод' + (wonCnt ? ' · ' + wonCnt + ' оплат' : '')
+        const label = '✓ ' + total + ' угод'
                     + (_gone ? ' · знято ' + _gone + ' видалених' : '');
         setCRMStatus(label, 'var(--a)');
         setCRMProgress(100);
@@ -6846,11 +6651,9 @@ async function startCRMSync(mode) {
       };
       const mA = _mergeArr(activeFileData.slice(), _sseActive);
       const mL = _mergeArr(lostFileData.slice(), _sseLost);
-      const mW = _mergeArr(wonFileData.slice(), _sseWon);
-      activeFileData.length = 0; lostFileData.length = 0; wonFileData.length = 0;
+      activeFileData.length = 0; lostFileData.length = 0;
       mA.forEach(r => activeFileData.push(r));
       mL.forEach(r => lostFileData.push(r));
-      mW.forEach(r => wonFileData.push(r));
       mergeData();
       const tot = activeFileData.length + lostFileData.length;
       localStorage.setItem('crm_last_sync_ts', Date.now().toString());
