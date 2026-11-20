@@ -5965,6 +5965,26 @@ function applyRestoredCRMData(active, lost, won) {
 (async function bootRestoreCRM() {
   let restored = false;
 
+  // 0. Пропуск питаємо ДО того, як показати цифри. До 20.11.2026 дашборд відкривався
+  // без пароля, і в браузерах тих людей лишились і сделки в localStorage, і мертвий
+  // токен. Без цієї перевірки така людина відкриває сторінку і читає вчорашні угоди,
+  // не ввівши нічого: ворота стоять на сервері, а кеш лежить у неї.
+  // Локальний проксі воріт не має — там пропуск не потрібен і питати нічого.
+  const _bootProxy = getCRMProxyUrl();
+  const _bootCloud = !_bootProxy.includes('localhost') && !_bootProxy.includes('127.0.0.1');
+  /* Кеш сделок зі старих заходів знімаємо разом із показом екрану входу. Екран
+     непрозорий і відмови не має, але цифри лежать у ЇХНЬОМУ браузері, і через
+     інструменти розробника їх видно й без пароля. Після входу дашборд одразу тягне
+     знімок із проксі (/api/data), тому для того, хто пароль знає, втрата — один запит. */
+  const _dropLeads = () => {
+    ['ads_active', 'ads_lost', 'ads_won'].forEach(k => localStorage.removeItem(k));
+    applyRestoredCRMData([], [], []);
+  };
+  if (_bootCloud && !getDashSession() && !getProxyToken()) {
+    _dropLeads();
+    await proxyLogin(_bootProxy);
+  }
+
   // 1. Спочатку відновлюємо з localStorage (миттєво — не чекаємо сервер)
   try {
     const sa = localStorage.getItem('ads_active');
@@ -6006,9 +6026,13 @@ function applyRestoredCRMData(active, lost, won) {
         // Нова людина приходить без пропуску: показуємо форму входу відразу, а не
         // порожній дашборд без жодного слова. 401 тут означає саме «пропуску немає
         // або він прострочений» — тихий обмін сесії proxyFetch уже спробував.
+        /* 401 означає, що пропуск не підійшов — у тому числі старий токен, підписаний
+           прежнім секретом: строк у ньому ще не вийшов, але сервер його не приймає.
+           Тому кеш знімаємо саме тут, а не лише коли пропуску немає зовсім. */
         if (r.status === 401) {
+          _dropLeads();
+          restored = false;
           if (await proxyLogin(proxyUrl)) r = await proxyFetch(proxyUrl, '/api/data', opts, true);
-          else setCRMStatus('Потрібен вхід: пошта і пароль від власника', 'var(--muted)');
         }
         if (r.ok) {
           const d = await r.json();
@@ -6289,7 +6313,9 @@ function proxyLogout() {
   localStorage.removeItem(PROXY_TOKEN_KEY);
   localStorage.removeItem(DASH_SESSION_KEY);
   localStorage.removeItem(DASH_OWNER_KEY);
-  render();
+  // Перезавантаження, а не render(): екран входу піднімається тим самим шляхом,
+  // що й на старті, і нічого з попереднього сеансу на екрані не лишається.
+  location.reload();
 }
 
 function saveDashPasses(d) {
@@ -6341,66 +6367,76 @@ async function remintProxyToken() {
 }
 
 /**
- * Форма входу: пошта + пароль. `prompt` тут не годиться — він однопольний, а пароль
- * у ньому ще й видно на екрані. Повертає Promise з {email, password} або null.
+ * Екран входу — окрема сторінка поверх дашборда: непрозора, на всю висоту і БЕЗ
+ * «Скасувати». Доки пароль не підійшов, цифр не видно взагалі: ворота стоять на
+ * сервері, але кеш попередніх сделок лежить у браузері, і напівпрозоре вікно з
+ * кнопкою «Скасувати» давало читати його без пароля.
+ * Повертає Promise, який справджується ЛИШЕ після успішного входу.
  */
-function askCredentials() {
-  return new Promise(resolve => {
-    const back = document.createElement('div');
-    back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
-    back.innerHTML = `
-      <form style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px;min-width:280px;max-width:92vw;display:flex;flex-direction:column;gap:12px">
-        <div style="font-weight:700;font-size:14px">Вхід до дашборда</div>
-        <div style="font-size:11px;color:var(--muted)">Пошта і пароль, які видав власник.</div>
-        <input name="email" type="email" placeholder="Пошта" autocomplete="username" spellcheck="false"
-               style="padding:9px 11px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px">
-        <input name="password" type="password" placeholder="Пароль" autocomplete="current-password"
-               style="padding:9px 11px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px">
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
-          <button type="button" data-x="cancel" style="padding:7px 13px;border-radius:6px;border:1px solid var(--border);background:var(--surface3);color:var(--muted);font-size:12px;cursor:pointer">Скасувати</button>
-          <button type="submit" style="padding:7px 13px;border-radius:6px;border:0;background:var(--accent);color:#0b1020;font-weight:700;font-size:12px;cursor:pointer">Увійти</button>
-        </div>
-      </form>`;
-    const done = v => { back.remove(); document.removeEventListener('keydown', onEsc); resolve(v); };
-    const onEsc = e => { if (e.key === 'Escape') done(null); };
-    back.querySelector('[data-x=cancel]').onclick = () => done(null);
-    back.querySelector('form').onsubmit = e => {
+function loginGate(proxyUrl) {
+  const was = document.getElementById('login-gate');
+  if (was) return was._wait;        // другий раз екран не плодимо
+  const back = document.createElement('div');
+  back.id = 'login-gate';
+  back.style.cssText = 'position:fixed;inset:0;background:var(--bg);z-index:99999;'
+    + 'display:flex;align-items:center;justify-content:center;padding:20px';
+  back.innerHTML = `
+    <form style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;width:340px;max-width:92vw;display:flex;flex-direction:column;gap:12px">
+      <div style="font-weight:700;font-size:16px">Дашборд реклами</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.5">Вхід за поштою і паролем, які видав власник. Без них дашборд не відкривається.</div>
+      <input name="email" type="email" placeholder="Пошта" autocomplete="username" spellcheck="false"
+             style="padding:10px 12px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px">
+      <input name="password" type="password" placeholder="Пароль" autocomplete="current-password"
+             style="padding:10px 12px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px">
+      <button type="submit" style="padding:10px 14px;border-radius:7px;border:0;background:var(--accent);color:#0b1020;font-weight:700;font-size:13px;cursor:pointer">Увійти</button>
+      <div data-x="err" style="font-size:12px;min-height:16px;color:var(--lost)"></div>
+    </form>`;
+  document.body.appendChild(back);
+  const f = back.querySelector('form');
+  const btn = back.querySelector('button[type=submit]');
+  const say = (text, bad = true) => {
+    const el = back.querySelector('[data-x=err]');
+    el.textContent = text || '';
+    el.style.color = bad ? 'var(--lost)' : 'var(--muted)';
+  };
+  back._wait = new Promise(resolve => {
+    f.onsubmit = async e => {
       e.preventDefault();
-      const f = e.target;
-      const email = f.email.value.trim().toLowerCase(), password = f.password.value;
-      if (!email || !password) return;
-      done({ email, password });
+      const cr = { email: f.email.value.trim().toLowerCase(), password: f.password.value };
+      if (!cr.email || !cr.password) return say('Впишіть пошту і пароль');
+      btn.disabled = true;
+      say('Перевіряємо…', false);
+      const ok = await tryLogin(proxyUrl, cr, say);
+      btn.disabled = false;
+      if (!ok) return undefined;
+      f.password.value = '';
+      back.remove();
+      return resolve(true);
     };
-    document.addEventListener('keydown', onEsc);
-    document.body.appendChild(back);
-    back.querySelector('[name=email]').focus();
   });
+  setTimeout(() => back.querySelector('[name=email]').focus(), 0);
+  return back._wait;
 }
 
 /**
- * Запитати пошту/пароль і зберегти пропуски. Повертає true, якщо токен отримано.
- * quiet=true — не чіпати користувача (фонові спроби на старті).
+ * Одна спроба входу. Головний вхід — воркер доступів; якщо він не відповів
+ * (мережа, 5xx або 404, коли маршрут ще не розгорнутий), лишається друга хвіртка —
+ * вхід у сам проксі за списком DASH_USERS у змінних Render.
  */
-async function proxyLogin(proxyUrl, quiet) {
-  if (quiet) return false;
-  const cr = await askCredentials();
-  if (!cr) return false;
+async function tryLogin(proxyUrl, cr, say) {
   try {
     saveDashPasses(await dashApi('/login', { method: 'POST', body: JSON.stringify(cr) }));
     return true;
   } catch (e) {
-    // Пароль не підійшов — так і кажемо. А от «воркер не відповів» (мережа, 5xx або
-    // 404, коли воркер із цим маршрутом ще не розгорнутий) це не відмова у доступі:
-    // лишається друга хвіртка — вхід у сам проксі за DASH_USERS.
-    if (e.status && e.status < 500 && e.status !== 404) { alert(e.message); return false; }
-    return await proxyLoginDirect(proxyUrl, cr);
+    // Пароль не підійшов — так і кажемо. «Не відповів» відмовою у доступі не є.
+    if (e.status && e.status < 500 && e.status !== 404) { say(e.message); return false; }
+    return await loginViaProxy(proxyUrl, cr, say);
   }
 }
 
-/** Друга хвіртка: вхід у сам проксі за списком DASH_USERS у змінних Render.
-    Нею власник дістане дані, якщо воркер доступів недоступний. Сесії тут немає —
+/** Друга хвіртка: вхід у сам проксі (DASH_USERS у змінних Render). Сесії тут немає,
     значить і панелі доступів не буде, поки воркер не відповідає. */
-async function proxyLoginDirect(proxyUrl, cr) {
+async function loginViaProxy(proxyUrl, cr, say) {
   try {
     const r = await fetch(proxyUrl + '/api/login', {
       method: 'POST',
@@ -6413,11 +6449,20 @@ async function proxyLoginDirect(proxyUrl, cr) {
       dropDashSession();
       return true;
     }
-    alert(d.message || ('Вхід не вдався: HTTP ' + r.status));
+    say(d.message || ('Вхід не вдався: HTTP ' + r.status));
   } catch (e) {
-    alert('Ні воркер доступів, ні проксі не відповіли: ' + (e.message || 'помилка'));
+    say('Ні воркер доступів, ні проксі не відповіли: ' + (e.message || 'помилка'));
   }
   return false;
+}
+
+/**
+ * Пропуск для запитів. quiet=true — фонова спроба на старті, користувача не чіпаємо.
+ * Інакше показуємо екран входу і чекаємо, доки пароль не підійде: відмовитись нема як.
+ */
+async function proxyLogin(proxyUrl, quiet) {
+  if (quiet) return false;
+  return await loginGate(proxyUrl);
 }
 
 /**
