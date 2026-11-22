@@ -2388,6 +2388,10 @@ function buildDimSpendMaps(fromISO = document.getElementById('f-from').value,
                            toISO   = document.getElementById('f-to').value) {
   const sd = getSpendData();
   const camp = {}, adset = {}, creo = {}, campAdset = {};
+  // Кліки по посиланню — ті самі ключі, що у витратах: з них рахується CR клік→заявка
+  // у Кампаніях, Адсетах і Крео. Старі файли витрат поля `clicks` не мають — там нулі,
+  // і колонка CR у таблиці не з'являється зовсім.
+  const cl = { camp: {}, adset: {}, creo: {}, campAdset: {} };
   // Original names (for spend-only rows with 0 leads)
   const campOrig = {};        // nk -> original campaign name
   const campAdsetOrig = {};   // "nkcamp||nkadset" -> {camp: orig, adset: orig}
@@ -2401,18 +2405,20 @@ function buildDimSpendMaps(fromISO = document.getElementById('f-from').value,
     // Index camp by BOTH campaign name AND adset name:
     // CRM often receives the adset name (not campaign name) as the "Кампанія" field
     // via Facebook Lead Ads integration → adset name is the actual match key
-    if (nc)  { camp[nc]  = (camp[nc]||0)  + s.spend; campOrig[nc] = origCamp; }
-    if (na)  camp[na]  = (camp[na]||0)  + s.spend;
-    if (na)  adset[na] = (adset[na]||0) + s.spend;
-    if (ncr) creo[ncr] = (creo[ncr]||0) + s.spend;
+    const clk = s.clicks || 0;
+    if (nc)  { camp[nc]  = (camp[nc]||0)  + s.spend; campOrig[nc] = origCamp; cl.camp[nc]  = (cl.camp[nc]||0)  + clk; }
+    if (na)  { camp[na]  = (camp[na]||0)  + s.spend;                          cl.camp[na]  = (cl.camp[na]||0)  + clk; }
+    if (na)  { adset[na] = (adset[na]||0) + s.spend;                          cl.adset[na] = (cl.adset[na]||0) + clk; }
+    if (ncr) { creo[ncr] = (creo[ncr]||0) + s.spend;                          cl.creo[ncr] = (cl.creo[ncr]||0) + clk; }
     // Compound key for adset table: campaign||adset (avoids same adset# in different campaigns sharing spend)
     if (nc && na) {
       const k=`${nc}||${na}`;
       campAdset[k]=(campAdset[k]||0)+s.spend;
+      cl.campAdset[k]=(cl.campAdset[k]||0)+clk;
       if (!campAdsetOrig[k]) campAdsetOrig[k] = { camp: origCamp, adset: origAdset };
     }
   });
-  return { camp, adset, creo, campAdset, campOrig, campAdsetOrig };
+  return { camp, adset, creo, campAdset, campOrig, campAdsetOrig, cl };
 }
 
 function renderCampaigns(d) {
@@ -2439,7 +2445,7 @@ function renderCampaigns(d) {
     });
     const w = last7();
     renderDimTable('tbl-campaigns','campaigns', campMap, sm.camp, aMap, SPEND_FILES.length > 0, fbGetCampaignStatus(),
-      w && {lbl:w.lbl, map:groupCat(w.rows,'campaign'), spend:w.sm.camp});
+      w && {lbl:w.lbl, map:groupCat(w.rows,'campaign'), spend:w.sm.camp}, null, sm.cl.camp);
   }
 }
 
@@ -2490,7 +2496,7 @@ function renderAdsets(d) {
     const sm = buildDimSpendMaps();
     const aMap = {};
     d.forEach(r => { if (r.category==='A' && r.adset) { const k=(r.campaign||'').trim().toLowerCase()+'||'+(r.adset||'').trim().toLowerCase(); aMap[k]=(aMap[k]||0)+1; } });
-    renderAdsetDimTable('tbl-adsets','adsets',d, sm.campAdset, aMap, sm.campAdsetOrig);
+    renderAdsetDimTable('tbl-adsets','adsets',d, sm.campAdset, aMap, sm.campAdsetOrig, sm.cl.campAdset);
   }
 }
 
@@ -2533,8 +2539,12 @@ function renderCreos(d) {
     const aMap = {};
     d.forEach(r => { if (r.category==='A' && r.creo) aMap[r.creo]=(aMap[r.creo]||0)+1; });
     const w = last7();
-    renderDimTable('tbl-creos','creos',groupCat(d,'creo'), buildCreoSpendMap(d, buildDimSpendMaps()), aMap, SPEND_FILES.length > 0, fbGetCreoStatus(),
-      w && {lbl:w.lbl, map:groupCat(w.rows,'creo'), spend:buildCreoSpendMap(w.rows, w.sm)});
+    const sm = buildDimSpendMaps();
+    // Кліки крео — лише пряме співпадіння за `ad_name`. Розкладати їх між крео пропорційно
+    // лідам, як це робить buildCreoSpendMap з витратами, не можна: CR = ліди ÷ (кліки × ліди/всього)
+    // дав би всім крео одного адсета однакове число.
+    renderDimTable('tbl-creos','creos',groupCat(d,'creo'), buildCreoSpendMap(d, sm), aMap, SPEND_FILES.length > 0, fbGetCreoStatus(),
+      w && {lbl:w.lbl, map:groupCat(w.rows,'creo'), spend:buildCreoSpendMap(w.rows, w.sm)}, null, sm.cl.creo);
   }
 }
 
@@ -3067,6 +3077,14 @@ function cplACell(v, color='var(--a)') {
 
 const CPL_U_LBL = '<span title="Ціна унікального ліда: витрати ÷ ліди без дублів">CPL унік. $</span>';
 
+// Конверсія кліку в заявку. Знаменник — кліки по посиланню з FB, чисельник — усі заявки
+// рядка разом із дублями: дубль — це теж надіслана форма, а не зайвий клік.
+const CR_LBL = '<span title="Конверсія клік→заявка: заявки ÷ кліки по посиланню (FB inline_link_clicks). Дублі в заявках враховані.">CR клік→заявка</span>';
+function crCell(v) {
+  if (!v) return '<span style="color:var(--border)">—</span>';
+  return `<span style="color:var(--accent);font-weight:600;display:block;text-align:right">${v.toFixed(1)}%</span>`;
+}
+
 // «Останні 7 днів» від найсвіжішої дати в даних (≈ дата оновлення статистики).
 // Це поточний момент, тому фільтр дат і решта фільтрів вибірки на вікно не діють.
 function last7() {
@@ -3121,7 +3139,7 @@ function makeDimTable(containerId, cols, rows, stateKey, lbl) {
 // extra — необов'язкова карта {lost} по назві розрізу: домальовує «Програні» і
 // «Програні %». Потрібне поки лише в областях, тому не вбудовано в groupCat:
 // там кошик — категорії, а не статуси.
-function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=false, statusMap=null, w7=null, extra=null) {
+function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=false, statusMap=null, w7=null, extra=null, clkMap=null) {
   const hasSpend = forceSpend || (spendMap && Object.keys(spendMap).length > 0);
   const nk = s => (s||'').trim().toLowerCase();
   const rows = Object.entries(map).map(([name,v])=>{
@@ -3132,7 +3150,8 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     const bLeads = v.B||0;
     const uniq = t - (v.dup||0);
     const lostN = extra?.lost?.[name] || 0;
-    return {name, total:t, A:v.A||0, B:v.B||0, C:v.C||0, none:non, unproc:unp,
+    const clk = clkMap?.[nk(name)] || 0;
+    return {name, total:t, cr: clk ? +(t/clk*100).toFixed(1) : 0, A:v.A||0, B:v.B||0, C:v.C||0, none:non, unproc:unp,
             noanswer:nans, work:wrk,
             lostN, pLost: t ? +(lostN/t*100).toFixed(1) : 0,
             pA:t?+(v.A/t*100).toFixed(1):0, pB:t?+(v.B/t*100).toFixed(1):0,
@@ -3173,12 +3192,15 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     cols.push({key:'cplA', label:'CPL A $',             fn:r=>cplACell(r.cplA)});
     cols.push({key:'cplB', label:'CPL B $',             fn:r=>cplACell(r.cplB,'var(--b)')});
   }
+  // Колонка CR є лише там, куди передали карту кліків: Кампанії і Крео. Областям, Лендам
+  // і Менеджерам кліки не передаються — там знаменник не збігається з ключем FB.
+  if (clkMap && Object.keys(clkMap).length) cols.push({key:'cr', label:CR_LBL, sep:true, fn:r=>crCell(r.cr)});
   makeDimTable(containerId, cols, rows, stateKey, w7 ? w7.lbl : '');
 }
 
 // Adset-specific table: Campaign + Adset as separate columns
 // Adset-specific table: Campaign + Adset as separate columns
-function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAdsetOrig) {
+function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAdsetOrig, clkMap=null) {
   const hasSpend = SPEND_FILES.length > 0 || (spendMap && Object.keys(spendMap).length > 0);
   const m = {};
   data.forEach(r => {
@@ -3216,7 +3238,8 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
     const sp     = spendMap?.[nca] || 0;
     const aLeads = aMap?.[(nkA(v.camp)+'||'+nkA(v.adset))] || 0;
     const uniq = t - (v.dup||0);
-    return { camp:v.camp, adset:v.adset, total:t,
+    const clk  = clkMap?.[nca] || 0;
+    return { camp:v.camp, adset:v.adset, total:t, cr: clk ? +(t/clk*100).toFixed(1) : 0,
       A:v.A||0, B:v.B||0, C:v.C||0, unproc:v.unproc||0, none:v.none||0,
       noanswer:v.noanswer||0, work:v.work||0,
       pA:t?+(v.A/t*100).toFixed(1):0, pB:t?+(v.B/t*100).toFixed(1):0,
@@ -3262,6 +3285,7 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
     cols.push({key:'cplA', label:'CPL A $',             fn:r=>cplACell(r.cplA)});
     cols.push({key:'cplB', label:'CPL B $',             fn:r=>cplACell(r.cplB,'var(--b)')});
   }
+  if (clkMap && Object.keys(clkMap).length) cols.push({key:'cr', label:CR_LBL, sep:true, fn:r=>crCell(r.cr)});
   makeDimTable(containerId, cols, rows, stateKey, w ? w.lbl : '');
 }
 
@@ -7347,7 +7371,7 @@ function dateChunks(since, until, days) {
 
 /** Один запит на одне вікно. Повертає рядки витрат; помилку FB віддає як є. */
 async function fbInsightsWindow(cleanId, since, until, token) {
-  const fields = 'campaign_id,campaign_name,adset_name,ad_name,spend';
+  const fields = 'campaign_id,campaign_name,adset_name,ad_name,spend,inline_link_clicks';
   const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
   // level=ad → дані на рівні кожного оголошення, включно з ad_name
   let url = `${FB_API}/${cleanId}/insights?fields=${fields}&level=ad&time_increment=1&time_range=${timeRange}&limit=500&access_token=${token}`;
@@ -7366,6 +7390,9 @@ async function fbInsightsWindow(cleanId, since, until, token) {
         adset:    r.adset_name    || '',
         ad:       r.ad_name       || '',
         spend:    spend,
+        // `inline_link_clicks`, а не `clicks`: у `clicks` входять лайки, коментарі й переходи
+        // на профіль — заявкою вони стати не можуть, і CR виходив би занижений.
+        clicks:   parseInt(r.inline_link_clicks) || 0,
       });
     }
     url = data.paging?.next || null;
