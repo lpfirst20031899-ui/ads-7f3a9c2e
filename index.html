@@ -521,7 +521,6 @@ tr:hover td{background:var(--surface2)}
     <input type="hidden" id="f-from">
     <input type="hidden" id="f-to">
   </div>
-  <div class="fg"><span class="fl">Статус</span><div class="ms" id="ms-status"><div class="ms-btn" onclick="toggleMs('ms-status')">Всі<span class="ms-badge" id="ms-status-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-status')">Всі</span><span class="ms-action" onclick="msNone('ms-status')">Жодного</span></div><div class="ms-list" id="ms-status-list"></div></div></div></div>
   <div class="fg"><span class="fl">Менеджер</span><div class="ms" id="ms-manager"><div class="ms-btn" onclick="toggleMs('ms-manager')">Всі<span class="ms-badge" id="ms-manager-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-manager',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-manager')">Всі</span><span class="ms-action" onclick="msNone('ms-manager')">Жодного</span></div><div class="ms-list" id="ms-manager-list"></div></div></div></div>
   <div class="fg"><span class="fl">Рекламіст</span><div class="ms" id="ms-user"><div class="ms-btn" onclick="toggleMs('ms-user')">Всі<span class="ms-badge" id="ms-user-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-user')">Всі</span><span class="ms-action" onclick="msNone('ms-user')">Жодного</span></div><div class="ms-list" id="ms-user-list"></div></div></div></div>
   <div class="fg" style="min-width:180px"><span class="fl">Кампанія</span><div class="ms" id="ms-campaign"><div class="ms-btn" onclick="toggleMs('ms-campaign')">Всі<span class="ms-badge" id="ms-campaign-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel" style="min-width:280px;max-width:none"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-campaign',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-campaign')">Всі</span><span class="ms-action" onclick="msNone('ms-campaign')">Жодного</span></div><div class="ms-list" id="ms-campaign-list"></div></div></div></div>
@@ -529,7 +528,9 @@ tr:hover td{background:var(--surface2)}
   <div class="fg"><span class="fl">Крео</span><div class="ms" id="ms-creo"><div class="ms-btn" onclick="toggleMs('ms-creo')">Всі<span class="ms-badge" id="ms-creo-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-creo',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-creo')">Всі</span><span class="ms-action" onclick="msNone('ms-creo')">Жодного</span></div><div class="ms-list" id="ms-creo-list"></div></div></div></div>
   <div class="fg"><span class="fl">Рекл. воронка</span><div class="ms" id="ms-ad_funnel"><div class="ms-btn" onclick="toggleMs('ms-ad_funnel')">Всі<span class="ms-badge" id="ms-ad_funnel-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-ad_funnel',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-ad_funnel')">Всі</span><span class="ms-action" onclick="msNone('ms-ad_funnel')">Жодного</span></div><div class="ms-list" id="ms-ad_funnel-list"></div></div></div></div>
   <div class="fg"><span class="fl">Категорія</span><div class="ms" id="ms-cat"><div class="ms-btn" onclick="toggleMs('ms-cat')">Всі<span class="ms-badge" id="ms-cat-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-cat')">Всі</span><span class="ms-action" onclick="msNone('ms-cat')">Жодного</span></div><div class="ms-list" id="ms-cat-list"></div></div></div></div>
-  <div class="fg" style="justify-content:flex-end;padding-top:14px;gap:8px">
+  <!-- Кнопки в РЯД: .fg за замовчуванням column, і «Без дублів» зі «Скинути» ставали
+       один під одним — рядок фільтрів виходив у три рівні замість двох. -->
+  <div class="fg" style="flex-direction:row;align-items:flex-end;justify-content:flex-end;padding-top:14px;gap:8px">
     <button class="btn-reset" id="btn-no-dups" onclick="toggleNoDups()"></button>
     <button class="btn-reset" onclick="resetFilters()">↺ Скинути</button>
   </div>
@@ -1625,7 +1626,6 @@ let lostFileData   = [];
 
 // ─── Multi-select state ────────────────────────────────
 const MS = {
-  status:   {selected: new Set(), all: ['active','lost'], labels:{'active':'В роботі','lost':'Програні'}},
   manager:  {selected: new Set(), all: []},
   user:     {selected: new Set(), all: ['Ricci','STVN','Артем'], labels:{'Ricci':'Ricci','STVN':'Stiven','Артем':'Артем'}},
   campaign: {selected: new Set(), all: []},
@@ -1905,7 +1905,6 @@ function filterData() {
     if (!d) return false;
     if (from && d < from) return false;
     if (to   && d >= to)  return false;
-    if (MS.status.selected.size   && !MS.status.selected.has(r.status))            return false;
     if (MS.manager.selected.size  && !MS.manager.selected.has(r.manager))          return false;
     if (MS.user.selected.size     && !adUserMatch(r.campaign, MS.user.selected))    return false;
     if (MS.campaign.selected.size && !MS.campaign.selected.has(r.campaign))        return false;
@@ -3855,7 +3854,6 @@ function drpNavMonth(dir) {
 }
 
 function initFilters() {
-  buildMs('status', ['active','lost']);
   buildMs('cat', ALL_CATS);
   buildMs('user', AD_USERS);
   buildMs('manager', uniqField('manager'));
@@ -3877,7 +3875,7 @@ function resetFilters() {
     document.getElementById('f-to').value   = '';
     document.getElementById('drp-label').textContent = 'Оберіть діапазон';
   }
-  ['status','manager','user','campaign','adset','creo','ad_funnel','cat'].forEach(k=>{ MS[k].selected.clear(); });
+  ['manager','user','campaign','adset','creo','ad_funnel','cat'].forEach(k=>{ MS[k].selected.clear(); });
   initFilters();
   render();
 }
@@ -4078,7 +4076,7 @@ function mergeData() {
     drpViewLeft = new Date(drpStart.getFullYear(), drpStart.getMonth(), 1);
     drpApply();
   }
-  ['status','manager','user','campaign','adset','creo','ad_funnel','cat'].forEach(k => MS[k].selected.clear());
+  ['manager','user','campaign','adset','creo','ad_funnel','cat'].forEach(k => MS[k].selected.clear());
   initFilters();
   render();
 }
