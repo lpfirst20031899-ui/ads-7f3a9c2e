@@ -1344,6 +1344,48 @@ function applyAdAliases() {
   if (typeof aliasCostRows === 'function') aliasCostRows(fix);
   return n;
 }
+// CRM кладе в поле «Кампанія» те, що віддала інтеграція FB Lead Ads, і це часто назва
+// АДСЕТА, а не кампанії (у кеші видно і `fb`, і `ig`, і `{{campaign.name}}`). Через це
+// адсет ставав окремим рядком у таблиці «Кампанії», а в Адсетах той самий елемент стояв
+// другий раз у колонці «Кампанія» (Артем, 23.11.2026, «Фин - 2»).
+//
+// Рівень визначають самі витрати: у їхніх рядках є і `campaign`, і `adset` з кабінету,
+// тобто повний список обох рівнів — тягнути щось додатково з FB не потрібно.
+// Ім'я, якого немає серед кампаній, але є серед адсетів, — це адсет.
+function adLevelsFromSpend() {
+  const nk = s => (s||'').trim().toLowerCase();
+  const camps = new Set(), byAdset = {};
+  // Сирі рядки (applyUserFilter=false): рівень елемента від вибраного «Рекламіста» не залежить.
+  getSpendData(false).forEach(s => {
+    const nc = nk(s.campaign), na = nk(s.adset);
+    if (nc) camps.add(nc);
+    if (!na || !nc) return;
+    // Адсет, що живе в кількох кампаніях, не чіпаємо зовсім: однойменні адсети в кабінеті
+    // є («12 - Copy»), і віднести лід до першої з кампаній означало б вигадати число.
+    if (!(na in byAdset)) byAdset[na] = (s.campaign||'').trim();
+    else if (byAdset[na] && nk(byAdset[na]) !== nc) byAdset[na] = null;
+  });
+  return { camps, byAdset };
+}
+// Зводимо ОДИН раз після завантаження даних — там же, де applyAdAliases: назва є ключем
+// групування в усіх таблицях і фільтрах.
+function applyAdsetAsCampaign() {
+  const { camps, byAdset } = adLevelsFromSpend();
+  if (!camps.size) return 0;
+  const nk = s => (s||'').trim().toLowerCase();
+  let n = 0;
+  const fix = r => {
+    const nc = nk(r.campaign);
+    if (!nc || camps.has(nc)) return;        // справжня назва кампанії — не торкаємось
+    const real = byAdset[nc];
+    if (!real) return;                       // не адсет або неоднозначний
+    // Назву адсета не губимо: якщо поле адсета порожнє, вона переїжджає туди.
+    if (!r.adset || nk(r.adset) === 'не вказано') r.adset = r.campaign;
+    r.campaign = real; n++;
+  };
+  [activeFileData, lostFileData].forEach(a => (a || []).forEach(fix));
+  return n;
+}
 function aliasCostRows(fix) {
   SPEND_FILES.forEach(f => (f.data || []).forEach(r => { fix(r, 'campaign'); fix(r, 'adset'); fix(r, 'ad'); }));
 }
@@ -3953,6 +3995,7 @@ function applyNoteFreeze() {
 function mergeData() {
   applyNoteFreeze();
   applyAdAliases();   // перейменовані кампанії/адсети/крео → поточні назви
+  applyAdsetAsCampaign();   // назва адсета в полі «Кампанія» → справжня кампанія
   DATA.length = 0;
   activeFileData.forEach(r => { if (!isExcludedLead(r)) DATA.push(r); });
   lostFileData.forEach(r => { if (!isExcludedLead(r)) DATA.push(r); });
@@ -5915,6 +5958,7 @@ function applyRestoredCRMData(active, lost) {
   activeFileData = active || [];
   lostFileData   = lost   || [];
   applyAdAliases();    // те саме зведення назв, що після синку
+  applyAdsetAsCampaign();
   applyNoteFreeze();   // обчислюємо r.main_note і на старті (не лише після синку)
   DATA.length = 0;
   activeFileData.forEach(r => { if (!isExcludedLead(r)) DATA.push(r); });
@@ -7357,6 +7401,7 @@ async function startFBSync(mode = 'full') {
 
     SPEND_FILES.push({ name: fileName, data: finalRows });
     applyAdAliases();   // старі дні в prevRows могли приїхати під колишніми назвами
+    applyAdsetAsCampaign();   // свіжі витрати могли вперше показати, що це адсет, а не кампанія
     try { localStorage.setItem('ads_spend_files', JSON.stringify(SPEND_FILES)); } catch(e) {
       console.warn('localStorage limit — spend files not persisted:', e);
     }
