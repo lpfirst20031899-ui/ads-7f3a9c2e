@@ -10,6 +10,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
+/* Мобільні браузери самі збільшують шрифт у широких блоках (text autosizing): таблиці
+   Кампаній і Адсетів ширші за екран у 5 разів, і назви на телефоні виходили помітно
+   більшими за решту тексту, хоч у CSS усюди 11px. Без цього рядка розмір не тримається
+   (Артем, 23.11.2026: «на телефоне названия кампаний и адсетов с очень большим шрифтом»). */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 :root{
   --bg:#0e1129;--surface:#181d38;--surface2:#202642;--surface3:#252d4e;
   --border:#293059;--text:#e2e8f0;--muted:#7b87ad;--accent:#7c8cf8;
@@ -1290,18 +1295,27 @@ const DASH_OWNER_KEY = 'dash_owner';
 // файлова система тимчасова — /tmp стирається разом зі списком.
 const DASH_AUTH_URL = 'https://go.green-partners.com.ua/dash/api';
 const AD_ALIAS_KEY = 'ad_name_aliases';
+// Рівень елемента в мапі аліасів і в журналі змін кабінету: поле рядка → ключ мапи.
+const ALIAS_LVL = { campaign: 'camp', adset: 'adset', creo: 'ad', ad: 'ad' };
 let _adAliasCache;
-function adAliasMap() {
+// Мапа аліасів ОКРЕМА на кожен рівень. До 23.11.2026 вона була одна, плоска, і плутала
+// рівні: кампанію й адсет часто звуть однаково, тому перейменований адсет переписував
+// назву однойменної кампанії — адсет вилазив рядком у таблиці «Кампанії» і другий раз
+// у колонці «Кампанія» в адсетах (Артем, 23.11.2026, «Фин - 2»).
+// Старий плоский формат НЕ читаємо: у ньому рівня немає, і вгадувати його нічим.
+// Мапа збирається заново при наступному синку з кабінетом.
+function adAliasMaps() {
   if (_adAliasCache === undefined) {
-    try { _adAliasCache = (JSON.parse(localStorage.getItem(AD_ALIAS_KEY) || '{}').map) || {}; }
-    catch (e) { _adAliasCache = {}; }
+    let raw = {};
+    try { raw = JSON.parse(localStorage.getItem(AD_ALIAS_KEY) || '{}'); } catch (e) {}
+    _adAliasCache = { camp: raw.camp || {}, adset: raw.adset || {}, ad: raw.ad || {} };
   }
   return _adAliasCache;
 }
 // Перейменувань могло бути кілька підряд (A→B→C), тому йдемо ланцюжком до кінця.
 // Межа кроків і seen — захист від циклу A→B→A, який інакше крутився б вічно.
-function adAliasResolve(name) {
-  const m = adAliasMap(), seen = new Set();
+function adAliasResolve(name, lvl) {
+  const m = adAliasMaps()[lvl] || {}, seen = new Set();
   let cur = (name || '').trim();
   for (let i = 0; i < 10; i++) {
     const k = cur.toLowerCase();
@@ -1316,11 +1330,13 @@ function adAliasResolve(name) {
 // Зводимо назви ОДИН раз після завантаження даних, а не на кожен рендер: назва —
 // ключ групування в усіх таблицях, фільтрах і бейджах, перераховувати її там дорого.
 function applyAdAliases() {
-  if (!Object.keys(adAliasMap()).length) return 0;
+  const maps = adAliasMaps();
+  if (!Object.values(maps).some(m => Object.keys(m).length)) return 0;
   let n = 0;
+  // Поле саме задає рівень: `creo`/`ad` — оголошення, `adset` — адсет, `campaign` — кампанія.
   const fix = (r, f) => {
     const v = r[f]; if (!v) return;
-    const c = adAliasResolve(v);
+    const c = adAliasResolve(v, ALIAS_LVL[f]);
     if (c !== v) { r[f] = c; n++; }
   };
   [activeFileData, lostFileData].forEach(arr =>
@@ -2388,10 +2404,10 @@ function buildDimSpendMaps(fromISO = document.getElementById('f-from').value,
                            toISO   = document.getElementById('f-to').value) {
   const sd = getSpendData();
   const camp = {}, adset = {}, creo = {}, campAdset = {};
-  // Кліки по посиланню — ті самі ключі, що у витратах: з них рахується CR клік→заявка
-  // у Кампаніях, Адсетах і Крео. Старі файли витрат поля `clicks` не мають — там нулі,
-  // і колонка CR у таблиці не з'являється зовсім.
-  const cl = { camp: {}, adset: {}, creo: {}, campAdset: {} };
+  // Перегляди лендінга — ті самі ключі, що у витратах: з них рахується CR перегляд→заявка
+  // у Кампаніях, Адсетах і Крео. Старі файли витрат поля `lpv` не мають — там нулі,
+  // і колонки «Перегляди» з CR у таблиці не з'являються зовсім.
+  const lpv = { camp: {}, adset: {}, creo: {}, campAdset: {} };
   // Original names (for spend-only rows with 0 leads)
   const campOrig = {};        // nk -> original campaign name
   const campAdsetOrig = {};   // "nkcamp||nkadset" -> {camp: orig, adset: orig}
@@ -2405,20 +2421,20 @@ function buildDimSpendMaps(fromISO = document.getElementById('f-from').value,
     // Index camp by BOTH campaign name AND adset name:
     // CRM often receives the adset name (not campaign name) as the "Кампанія" field
     // via Facebook Lead Ads integration → adset name is the actual match key
-    const clk = s.clicks || 0;
-    if (nc)  { camp[nc]  = (camp[nc]||0)  + s.spend; campOrig[nc] = origCamp; cl.camp[nc]  = (cl.camp[nc]||0)  + clk; }
-    if (na)  { camp[na]  = (camp[na]||0)  + s.spend;                          cl.camp[na]  = (cl.camp[na]||0)  + clk; }
-    if (na)  { adset[na] = (adset[na]||0) + s.spend;                          cl.adset[na] = (cl.adset[na]||0) + clk; }
-    if (ncr) { creo[ncr] = (creo[ncr]||0) + s.spend;                          cl.creo[ncr] = (cl.creo[ncr]||0) + clk; }
+    const vw = s.lpv || 0;
+    if (nc)  { camp[nc]  = (camp[nc]||0)  + s.spend; campOrig[nc] = origCamp; lpv.camp[nc]  = (lpv.camp[nc]||0)  + vw; }
+    if (na)  { camp[na]  = (camp[na]||0)  + s.spend;                          lpv.camp[na]  = (lpv.camp[na]||0)  + vw; }
+    if (na)  { adset[na] = (adset[na]||0) + s.spend;                          lpv.adset[na] = (lpv.adset[na]||0) + vw; }
+    if (ncr) { creo[ncr] = (creo[ncr]||0) + s.spend;                          lpv.creo[ncr] = (lpv.creo[ncr]||0) + vw; }
     // Compound key for adset table: campaign||adset (avoids same adset# in different campaigns sharing spend)
     if (nc && na) {
       const k=`${nc}||${na}`;
       campAdset[k]=(campAdset[k]||0)+s.spend;
-      cl.campAdset[k]=(cl.campAdset[k]||0)+clk;
+      lpv.campAdset[k]=(lpv.campAdset[k]||0)+vw;
       if (!campAdsetOrig[k]) campAdsetOrig[k] = { camp: origCamp, adset: origAdset };
     }
   });
-  return { camp, adset, creo, campAdset, campOrig, campAdsetOrig, cl };
+  return { camp, adset, creo, campAdset, campOrig, campAdsetOrig, lpv };
 }
 
 function renderCampaigns(d) {
@@ -2445,7 +2461,7 @@ function renderCampaigns(d) {
     });
     const w = last7();
     renderDimTable('tbl-campaigns','campaigns', campMap, sm.camp, aMap, SPEND_FILES.length > 0, fbGetCampaignStatus(),
-      w && {lbl:w.lbl, map:groupCat(w.rows,'campaign'), spend:w.sm.camp}, null, sm.cl.camp);
+      w && {lbl:w.lbl, map:groupCat(w.rows,'campaign'), spend:w.sm.camp}, null, sm.lpv.camp);
   }
 }
 
@@ -2496,7 +2512,7 @@ function renderAdsets(d) {
     const sm = buildDimSpendMaps();
     const aMap = {};
     d.forEach(r => { if (r.category==='A' && r.adset) { const k=(r.campaign||'').trim().toLowerCase()+'||'+(r.adset||'').trim().toLowerCase(); aMap[k]=(aMap[k]||0)+1; } });
-    renderAdsetDimTable('tbl-adsets','adsets',d, sm.campAdset, aMap, sm.campAdsetOrig, sm.cl.campAdset);
+    renderAdsetDimTable('tbl-adsets','adsets',d, sm.campAdset, aMap, sm.campAdsetOrig, sm.lpv.campAdset);
   }
 }
 
@@ -2540,11 +2556,11 @@ function renderCreos(d) {
     d.forEach(r => { if (r.category==='A' && r.creo) aMap[r.creo]=(aMap[r.creo]||0)+1; });
     const w = last7();
     const sm = buildDimSpendMaps();
-    // Кліки крео — лише пряме співпадіння за `ad_name`. Розкладати їх між крео пропорційно
-    // лідам, як це робить buildCreoSpendMap з витратами, не можна: CR = ліди ÷ (кліки × ліди/всього)
+    // Перегляди крео — лише пряме співпадіння за `ad_name`. Розкладати їх між крео пропорційно
+    // лідам, як це робить buildCreoSpendMap з витратами, не можна: CR = ліди ÷ (перегляди × ліди/всього)
     // дав би всім крео одного адсета однакове число.
     renderDimTable('tbl-creos','creos',groupCat(d,'creo'), buildCreoSpendMap(d, sm), aMap, SPEND_FILES.length > 0, fbGetCreoStatus(),
-      w && {lbl:w.lbl, map:groupCat(w.rows,'creo'), spend:buildCreoSpendMap(w.rows, w.sm)}, null, sm.cl.creo);
+      w && {lbl:w.lbl, map:groupCat(w.rows,'creo'), spend:buildCreoSpendMap(w.rows, w.sm)}, null, sm.lpv.creo);
   }
 }
 
@@ -3077,9 +3093,14 @@ function cplACell(v, color='var(--a)') {
 
 const CPL_U_LBL = '<span title="Ціна унікального ліда: витрати ÷ ліди без дублів">CPL унік. $</span>';
 
-// Конверсія кліку в заявку. Знаменник — кліки по посиланню з FB, чисельник — усі заявки
-// рядка разом із дублями: дубль — це теж надіслана форма, а не зайвий клік.
-const CR_LBL = '<span title="Конверсія клік→заявка: заявки ÷ кліки по посиланню (FB inline_link_clicks). Дублі в заявках враховані.">CR клік→заявка</span>';
+// Конверсія перегляду лендінга в заявку. Знаменник — `landing_page_view` з FB,
+// чисельник — усі заявки рядка разом із дублями: дубль — це теж надіслана форма.
+const LPV_LBL = '<span title="Перегляди лендінга з FB (landing_page_view): скільки разів сторінка справді відкрилась після кліку">Перегляди</span>';
+const CR_LBL = '<span title="Конверсія перегляд→заявка: заявки ÷ перегляди лендінга (FB landing_page_view). Дублі в заявках враховані.">CR → заявка</span>';
+function lpvCell(v) {
+  if (!v) return '<span style="color:var(--border)">—</span>';
+  return `<span style="color:var(--muted);font-weight:600;display:block;text-align:right">${v.toLocaleString('en-US')}</span>`;
+}
 function crCell(v) {
   if (!v) return '<span style="color:var(--border)">—</span>';
   return `<span style="color:var(--accent);font-weight:600;display:block;text-align:right">${v.toFixed(1)}%</span>`;
@@ -3139,7 +3160,7 @@ function makeDimTable(containerId, cols, rows, stateKey, lbl) {
 // extra — необов'язкова карта {lost} по назві розрізу: домальовує «Програні» і
 // «Програні %». Потрібне поки лише в областях, тому не вбудовано в groupCat:
 // там кошик — категорії, а не статуси.
-function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=false, statusMap=null, w7=null, extra=null, clkMap=null) {
+function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=false, statusMap=null, w7=null, extra=null, lpvMap=null) {
   const hasSpend = forceSpend || (spendMap && Object.keys(spendMap).length > 0);
   const nk = s => (s||'').trim().toLowerCase();
   const rows = Object.entries(map).map(([name,v])=>{
@@ -3150,8 +3171,8 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     const bLeads = v.B||0;
     const uniq = t - (v.dup||0);
     const lostN = extra?.lost?.[name] || 0;
-    const clk = clkMap?.[nk(name)] || 0;
-    return {name, total:t, cr: clk ? +(t/clk*100).toFixed(1) : 0, A:v.A||0, B:v.B||0, C:v.C||0, none:non, unproc:unp,
+    const vw = lpvMap?.[nk(name)] || 0;
+    return {name, total:t, lpv: vw, cr: vw ? +(t/vw*100).toFixed(1) : 0, A:v.A||0, B:v.B||0, C:v.C||0, none:non, unproc:unp,
             noanswer:nans, work:wrk,
             lostN, pLost: t ? +(lostN/t*100).toFixed(1) : 0,
             pA:t?+(v.A/t*100).toFixed(1):0, pB:t?+(v.B/t*100).toFixed(1):0,
@@ -3192,15 +3213,18 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     cols.push({key:'cplA', label:'CPL A $',             fn:r=>cplACell(r.cplA)});
     cols.push({key:'cplB', label:'CPL B $',             fn:r=>cplACell(r.cplB,'var(--b)')});
   }
-  // Колонка CR є лише там, куди передали карту кліків: Кампанії і Крео. Областям, Лендам
-  // і Менеджерам кліки не передаються — там знаменник не збігається з ключем FB.
-  if (clkMap && Object.keys(clkMap).length) cols.push({key:'cr', label:CR_LBL, sep:true, fn:r=>crCell(r.cr)});
+  // Перегляди і CR є лише там, куди передали карту переглядів: Кампанії і Крео. Областям,
+  // Лендам і Менеджерам вона не передається — там знаменник не збігається з ключем FB.
+  if (lpvMap && Object.keys(lpvMap).length) {
+    cols.push({key:'lpv', label:LPV_LBL, sep:true, fn:r=>lpvCell(r.lpv)});
+    cols.push({key:'cr',  label:CR_LBL,            fn:r=>crCell(r.cr)});
+  }
   makeDimTable(containerId, cols, rows, stateKey, w7 ? w7.lbl : '');
 }
 
 // Adset-specific table: Campaign + Adset as separate columns
 // Adset-specific table: Campaign + Adset as separate columns
-function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAdsetOrig, clkMap=null) {
+function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAdsetOrig, lpvMap=null) {
   const hasSpend = SPEND_FILES.length > 0 || (spendMap && Object.keys(spendMap).length > 0);
   const m = {};
   data.forEach(r => {
@@ -3238,8 +3262,8 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
     const sp     = spendMap?.[nca] || 0;
     const aLeads = aMap?.[(nkA(v.camp)+'||'+nkA(v.adset))] || 0;
     const uniq = t - (v.dup||0);
-    const clk  = clkMap?.[nca] || 0;
-    return { camp:v.camp, adset:v.adset, total:t, cr: clk ? +(t/clk*100).toFixed(1) : 0,
+    const vw   = lpvMap?.[nca] || 0;
+    return { camp:v.camp, adset:v.adset, total:t, lpv: vw, cr: vw ? +(t/vw*100).toFixed(1) : 0,
       A:v.A||0, B:v.B||0, C:v.C||0, unproc:v.unproc||0, none:v.none||0,
       noanswer:v.noanswer||0, work:v.work||0,
       pA:t?+(v.A/t*100).toFixed(1):0, pB:t?+(v.B/t*100).toFixed(1):0,
@@ -3261,7 +3285,7 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
   const _campStatus = fbGetCampaignStatus(), _adsetStatus = fbGetAdsetStatus();
   const cols = [
     {key:'camp',   label:'Кампанія',   fn:r=>`${fbStatusBadge(_campStatus,r.camp)}<span style="color:var(--muted);font-size:11px;white-space:nowrap">${escHtml(r.camp)}</span>`},
-    {key:'adset',  label:'Адсет',      fn:r=>`${fbStatusBadge(_adsetStatus,r.adset)}<strong>${escHtml(r.adset)}</strong>`},
+    {key:'adset',  label:'Адсет',      fn:r=>`${fbStatusBadge(_adsetStatus,r.adset)}<span style="font-size:11px;font-weight:600">${escHtml(r.adset)}</span>`},
     {key:'total',  label:'Всього',     fn:r=>`<strong>${r.total}</strong>`},
     {key:'A',      label:'A (кіл.)',   fn:r=>`<span style="color:var(--a);font-weight:700">${r.A}</span>`},
     {key:'pA',     label:'A %',        fn:r=>barCell(r.A, r.pA, 'var(--a)')},
@@ -3285,7 +3309,10 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
     cols.push({key:'cplA', label:'CPL A $',             fn:r=>cplACell(r.cplA)});
     cols.push({key:'cplB', label:'CPL B $',             fn:r=>cplACell(r.cplB,'var(--b)')});
   }
-  if (clkMap && Object.keys(clkMap).length) cols.push({key:'cr', label:CR_LBL, sep:true, fn:r=>crCell(r.cr)});
+  if (lpvMap && Object.keys(lpvMap).length) {
+    cols.push({key:'lpv', label:LPV_LBL, sep:true, fn:r=>lpvCell(r.lpv)});
+    cols.push({key:'cr',  label:CR_LBL,            fn:r=>crCell(r.cr)});
+  }
   makeDimTable(containerId, cols, rows, stateKey, w ? w.lbl : '');
 }
 
@@ -6770,12 +6797,26 @@ async function fbPages(url, maxPages = 20, retries = 4) {
 // ponytail: fetch після тайм-ауту продовжує йти у фоні — обриваємо лише очікування.
 const RENAME_MS_ACC = 12000, RENAME_MS_ALL = 40000;
 async function fbSyncRenames(accounts, onProgress) {
-  let map = {};
-  try { map = (JSON.parse(localStorage.getItem(AD_ALIAS_KEY) || '{}').map) || {}; } catch (e) {}
+  let maps = { camp: {}, adset: {}, ad: {} };
+  try {
+    const raw = JSON.parse(localStorage.getItem(AD_ALIAS_KEY) || '{}');
+    maps = { camp: raw.camp || {}, adset: raw.adset || {}, ad: raw.ad || {} };
+  } catch (e) {}
+  // Рівень події — з `object_type` (CAMPAIGN / AD_SET / AD). `event_type` для цього не
+  // годиться: у старому API адсет звався campaign, і `update_campaign_name` означає
+  // то кампанію, то адсет. Подію без зрозумілого рівня пропускаємо: аліас не на тому
+  // рівні гірший за відсутній — він підміняє назву живого елемента чужою.
+  const lvlOf = ev => {
+    const t = String(ev.object_type || '').toUpperCase();
+    if (t === 'CAMPAIGN') return 'camp';
+    if (t === 'AD_SET' || t === 'ADSET') return 'adset';
+    if (t === 'AD') return 'ad';
+    return null;
+  };
   // Вікно — поточний рік: дашборд і так рахує лише з 1 січня.
   const since = `${new Date().getFullYear()}-01-01`;
   const tStart = Date.now();
-  let added = 0, failed = 0, skipped = 0, i = 0;
+  let added = 0, failed = 0, skipped = 0, noLvl = 0, i = 0;
   const deadline = (pr, ms) => Promise.race([pr,
     new Promise((_, rej) => setTimeout(() => rej(new Error('тайм-аут журналу')), ms))]);
   for (const { id, token } of accounts) {
@@ -6784,7 +6825,7 @@ async function fbSyncRenames(accounts, onProgress) {
     let evs;
     try {
       // 3 сторінки по 500 подій на кабінет і один ретрай: дані додаткові, чекати нема сенсу.
-      evs = await deadline(fbPages(`${FB_API}/${id}/activities?fields=event_type,extra_data,event_time&since=${since}&limit=500&access_token=${token}`, 3, 1), RENAME_MS_ACC);
+      evs = await deadline(fbPages(`${FB_API}/${id}/activities?fields=event_type,extra_data,event_time,object_type&since=${since}&limit=500&access_token=${token}`, 3, 1), RENAME_MS_ACC);
     } catch (e) { failed++; continue; }
     // Хронологічно: друге перейменування тієї ж назви має перетерти перше.
     evs.sort((a, b) => String(a.event_time || '').localeCompare(String(b.event_time || '')));
@@ -6794,12 +6835,15 @@ async function fbSyncRenames(accounts, onProgress) {
       const oldN = String(x.old_value != null ? x.old_value : (x.old_name || '')).trim();
       const newN = String(x.new_value != null ? x.new_value : (x.new_name || '')).trim();
       if (!oldN || !newN || oldN.toLowerCase() === newN.toLowerCase()) continue;
-      map[oldN.toLowerCase()] = newN; added++;
+      const lvl = lvlOf(ev);
+      if (!lvl) { noLvl++; continue; }
+      maps[lvl][oldN.toLowerCase()] = newN; added++;
     }
   }
-  try { localStorage.setItem(AD_ALIAS_KEY, JSON.stringify({ ts: Date.now(), map })); } catch (e) {}
+  try { localStorage.setItem(AD_ALIAS_KEY, JSON.stringify({ ts: Date.now(), ...maps })); } catch (e) {}
   _adAliasCache = undefined;
-  return { pairs: Object.keys(map).length, events: added, failed, skipped };
+  const pairs = Object.values(maps).reduce((a, m) => a + Object.keys(m).length, 0);
+  return { pairs, events: added, failed, skipped, noLvl };
 }
 
 function toggleFBPanel() {
@@ -7371,7 +7415,7 @@ function dateChunks(since, until, days) {
 
 /** Один запит на одне вікно. Повертає рядки витрат; помилку FB віддає як є. */
 async function fbInsightsWindow(cleanId, since, until, token) {
-  const fields = 'campaign_id,campaign_name,adset_name,ad_name,spend,inline_link_clicks';
+  const fields = 'campaign_id,campaign_name,adset_name,ad_name,spend,actions';
   const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
   // level=ad → дані на рівні кожного оголошення, включно з ad_name
   let url = `${FB_API}/${cleanId}/insights?fields=${fields}&level=ad&time_increment=1&time_range=${timeRange}&limit=500&access_token=${token}`;
@@ -7390,9 +7434,10 @@ async function fbInsightsWindow(cleanId, since, until, token) {
         adset:    r.adset_name    || '',
         ad:       r.ad_name       || '',
         spend:    spend,
-        // `inline_link_clicks`, а не `clicks`: у `clicks` входять лайки, коментарі й переходи
-        // на профіль — заявкою вони стати не можуть, і CR виходив би занижений.
-        clicks:   parseInt(r.inline_link_clicks) || 0,
+        // Перегляди лендінга (`landing_page_view` у `actions`), а не кліки: клік рахується
+        // в момент тапу, а перегляд — коли сторінка справді відкрилась. Різниця — відвали
+        // на завантаженні, і саме перегляд є знаменником конверсії (Артем, 23.11.2026).
+        lpv:      parseInt((r.actions || []).find(a => a.action_type === 'landing_page_view')?.value) || 0,
       });
     }
     url = data.paging?.next || null;
