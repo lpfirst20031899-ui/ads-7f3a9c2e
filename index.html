@@ -530,6 +530,7 @@ tr:hover td{background:var(--surface2)}
   <div class="fg"><span class="fl">Рекл. воронка</span><div class="ms" id="ms-ad_funnel"><div class="ms-btn" onclick="toggleMs('ms-ad_funnel')">Всі<span class="ms-badge" id="ms-ad_funnel-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-ad_funnel',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-ad_funnel')">Всі</span><span class="ms-action" onclick="msNone('ms-ad_funnel')">Жодного</span></div><div class="ms-list" id="ms-ad_funnel-list"></div></div></div></div>
   <div class="fg"><span class="fl">Категорія</span><div class="ms" id="ms-cat"><div class="ms-btn" onclick="toggleMs('ms-cat')">Всі<span class="ms-badge" id="ms-cat-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-cat')">Всі</span><span class="ms-action" onclick="msNone('ms-cat')">Жодного</span></div><div class="ms-list" id="ms-cat-list"></div></div></div></div>
   <div class="fg" style="justify-content:flex-end;padding-top:14px;gap:8px">
+    <button class="btn-reset" id="btn-no-dups" onclick="toggleNoDups()"></button>
     <button class="btn-reset" onclick="resetFilters()">↺ Скинути</button>
   </div>
 </div>
@@ -1352,39 +1353,71 @@ function applyAdAliases() {
 // Рівень визначають самі витрати: у їхніх рядках є і `campaign`, і `adset` з кабінету,
 // тобто повний список обох рівнів — тягнути щось додатково з FB не потрібно.
 // Ім'я, якого немає серед кампаній, але є серед адсетів, — це адсет.
+// День заявки у форматі `2026-11-23`. Дата CRM приходить як «23.11.2026 14:05».
+function leadDayISO(date) {
+  const p = String(date || '').split(' ')[0].split('.');
+  return p.length === 3 ? `${p[2]}-${p[1]}-${p[0]}` : '';
+}
+// Лід, чий адсет крутився в кількох кампаніях одночасно, не отримує кампанію навмання:
+// краще окремий рядок, за яким видно розмір проблеми, ніж чуже число в живій кампанії.
+const CAMP_UNKNOWN = '⚠ Адсет без кампанії';
 function adLevelsFromSpend() {
   const nk = s => (s||'').trim().toLowerCase();
-  const camps = new Set(), byAdset = {};
+  const camps = new Set(), byAdset = {}, byAdsetDay = {};
   // Сирі рядки (applyUserFilter=false): рівень елемента від вибраного «Рекламіста» не залежить.
   getSpendData(false).forEach(s => {
     const nc = nk(s.campaign), na = nk(s.adset);
     if (nc) camps.add(nc);
     if (!na || !nc) return;
-    // Адсет, що живе в кількох кампаніях, не чіпаємо зовсім: однойменні адсети в кабінеті
-    // є («12 - Copy»), і віднести лід до першої з кампаній означало б вигадати число.
-    if (!(na in byAdset)) byAdset[na] = (s.campaign||'').trim();
-    else if (byAdset[na] && nk(byAdset[na]) !== nc) byAdset[na] = null;
+    const orig = (s.campaign || '').trim();
+    (byAdset[na] = byAdset[na] || new Set()).add(orig);
+    // Адсети в кабінеті названі просто числами («21», «1», «2»), і одне й те саме число
+    // є в десятку кампаній — замір по кешу CRM 23.11.2026: адсет «2» у 8 кампаніях,
+    // «21» у 803 заявках. Тому ключ не «адсет», а «адсет + день»: однойменні адсети
+    // майже ніколи не крутяться одночасно, і день заявки розрізняє їх однозначно.
+    const k = na + '|' + s.date;
+    (byAdsetDay[k] = byAdsetDay[k] || new Set()).add(orig);
   });
-  return { camps, byAdset };
+  return { camps, byAdset, byAdsetDay };
 }
 // Зводимо ОДИН раз після завантаження даних — там же, де applyAdAliases: назва є ключем
 // групування в усіх таблицях і фільтрах.
 function applyAdsetAsCampaign() {
-  const { camps, byAdset } = adLevelsFromSpend();
+  const { camps, byAdset, byAdsetDay } = adLevelsFromSpend();
   if (!camps.size) return 0;
   const nk = s => (s||'').trim().toLowerCase();
+  // Три кроки, від точного до грубого. Перший, що дав ОДНУ кампанію, виграє.
+  const pickCamp = (na, iso) => {
+    // ±1 день: заявка з 23:00 могла потрапити в інший день, ніж витрати FB (у них свій
+    // часовий пояс кабінету), а клік учора й заявка сьогодні — звичайна річ.
+    for (const d of [iso, shiftDay(iso, -1), shiftDay(iso, 1)]) {
+      const set = d && byAdsetDay[na + '|' + d];
+      if (set && set.size === 1) return [...set][0];
+    }
+    const all = byAdset[na];
+    if (all && all.size === 1) return [...all][0];   // адсет узагалі в одній кампанії
+    return CAMP_UNKNOWN;
+  };
   let n = 0;
   const fix = r => {
     const nc = nk(r.campaign);
     if (!nc || camps.has(nc)) return;        // справжня назва кампанії — не торкаємось
-    const real = byAdset[nc];
-    if (!real) return;                       // не адсет або неоднозначний
+    if (!byAdset[nc]) return;                // такого адсета в кабінеті немає — не наш випадок
     // Назву адсета не губимо: якщо поле адсета порожнє, вона переїжджає туди.
     if (!r.adset || nk(r.adset) === 'не вказано') r.adset = r.campaign;
-    r.campaign = real; n++;
+    r.campaign = pickCamp(nc, leadDayISO(r.date)); n++;
   };
   [activeFileData, lostFileData].forEach(a => (a || []).forEach(fix));
   return n;
+}
+// Сусідній день у тому ж форматі. Через Date, а не арифметикою по рядку: 01.03 мінус день
+// це 28 або 29 лютого, і таблиці переходів на рядках тут не потрібно.
+function shiftDay(iso, delta) {
+  const d = parseISO(iso);
+  if (!d) return '';
+  d.setDate(d.getDate() + delta);
+  const p2 = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
 }
 function aliasCostRows(fix) {
   SPEND_FILES.forEach(f => (f.data || []).forEach(r => { fix(r, 'campaign'); fix(r, 'adset'); fix(r, 'ad'); }));
@@ -1499,6 +1532,10 @@ const CM_CAT_ORDER = { A: 0, B: 1, C: 2 };
 // Показ колонок «звідки заявка» у вкладці Коментарі (перемикається кнопками)
 const _cmShow = { campaign: true, adset: false, creo: false };
 let _show7d = true;   // колонки «·7д» у Кампаніях, Адсетах, Крео
+// Дублі з вибірки прибирає САМ filterData, а не кожна таблиця окремо: тоді без дублів
+// рахується вся вибірка разом — кількості, відсотки й усі похідні числа, — і вкладки
+// не можуть розійтись між собою (Артем, 23.11.2026).
+let _noDups = false;
 // Колонки станів заявки — перемикачі ТІЛЬКИ для таблиць розрізів (Кампанії, Адсети,
 // Крео, Менеджери). У закріплених метриках зверху вони висять завжди.
 // Кнопка одна на метрику й тягне обидві її колонки — кількість і відсоток разом
@@ -1536,6 +1573,7 @@ function saveUIState() {
       cmSort:        _cmSort,
       cmShow:        _cmShow,
       show7d:        _show7d,
+      noDups:        _noDups,
       stateCols:     _stateCols,
       lostReasonPct: window._lostReasonPct,
       lostCreoPct:   window._lostCreoPct,
@@ -1565,6 +1603,7 @@ function loadUIState() {
     if (s.cmSort) Object.assign(_cmSort, s.cmSort);
     if (s.cmShow) Object.assign(_cmShow, s.cmShow);
     if (s.show7d !== undefined) _show7d = s.show7d;
+    if (s.noDups !== undefined) _noDups = s.noDups;
     if (s.lostReasonPct !== undefined) window._lostReasonPct = s.lostReasonPct;
     if (s.lostCreoPct   !== undefined) window._lostCreoPct   = s.lostCreoPct;
     if (s.lostCampPct   !== undefined) window._lostCampPct   = s.lostCampPct;
@@ -1874,6 +1913,7 @@ function filterData() {
     if (MS.creo.selected.size     && !MS.creo.selected.has(r.creo))                return false;
     if (MS.ad_funnel.selected.size && !MS.ad_funnel.selected.has(r.ad_funnel||'Не вказано')) return false;
     if (MS.cat.selected.size      && !MS.cat.selected.has(normCat(r.category, r.status, r.id)))    return false;
+    if (_noDups && isDup(r)) return false;
     return true;
   });
 }
@@ -1886,7 +1926,7 @@ function groupCat(data, field) {
   const m = {};
   data.forEach(r => {
     const k = (r[field]||'Не вказано').toString().trim();
-    if (!m[k]) m[k] = {A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0,dup:0};
+    if (!m[k]) m[k] = emptyCats();
     m[k][normCat(r.category, r.status, r.id)]++;
     if (isDup(r)) m[k].dup++;
   });
@@ -1894,6 +1934,11 @@ function groupCat(data, field) {
 }
 
 const ALL_CATS = ['A','B','C','none','unproc','noanswer','work'];
+// Порожній кошик — ОДНИМ місцем. Кожен новий стан заявки інакше доводиться дописувати
+// у вісім корзин, і там, де його забули, заявка зникала з «Всього» зовсім: `undefined + 1`
+// дає NaN, а `v.noanswer || 0` далі гасить його в нуль. Живцем 23.11.2026: розбивка по
+// адсетах показувала 10 893 замість 11 156 — у її кошику бракувало `noanswer` і `work`.
+const emptyCats = () => ({A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0,dup:0});
 function catTotal(v) { return (v.A||0)+(v.B||0)+(v.C||0)+(v.none||0)+(v.unproc||0)+(v.noanswer||0)+(v.work||0); }
 
 function sortedKeys(map) {
@@ -2091,6 +2136,7 @@ function barCell(val, pctVal, color) {
 
 // ─── Main render ───────────────────────────────────────
 function render() {
+  renderNoDupsBtn();
   saveUIState();
   // Вік кеша статусів — на самій кнопці: бейджі гаснуть через FB_STATUS_TTL_H, і без
   // підпису незрозуміло, чому кружечків немає.
@@ -2220,7 +2266,7 @@ function renderRegions(d) {
   const map = {};
   rows.forEach(r => {
     const k = r._reg || 'Не вказано';
-    if (!map[k]) map[k] = {A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0,dup:0};
+    if (!map[k]) map[k] = emptyCats();
     map[k][normCat(r.category, r.status, r.id)]++;
     if (isDup(r)) map[k].dup++;
   });
@@ -2256,7 +2302,7 @@ function regSetSort(v)  { _regSort = v; renderRegions(filterData()); }
 
 /** Згортає набір заявок у {n, A, B, C, none, unproc, noanswer, work, dup}. */
 function regAgg(list) {
-  const v = {n: list.length, A: 0, B: 0, C: 0, none: 0, unproc: 0, noanswer: 0, work: 0, dup: 0};
+  const v = {n: list.length, ...emptyCats()};
   list.forEach(r => {
     v[normCat(r.category, r.status, r.id)]++;
     if (isDup(r)) v.dup++;
@@ -2426,7 +2472,7 @@ function renderOverview(d) {
       const dow = (dt.getDay() + 6) % 7;
       const mon = new Date(dt.getTime() - dow * 86400000);
       const k = mon.getFullYear() + '-' + String(mon.getMonth()+1).padStart(2,'0') + '-' + String(mon.getDate()).padStart(2,'0');
-      if (!ww[k]) ww[k] = {A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};
+      if (!ww[k]) ww[k] = emptyCats();
       ww[k][normCat(r.category, r.status, r.id)]++;
     });
     const weeks = Object.keys(ww).sort();
@@ -2498,7 +2544,7 @@ function renderCampaigns(d) {
     Object.entries(sm.campOrig).forEach(([nkName, origName]) => {
       if (!existNk.has(nkName) && origName && (sm.camp[nkName]||0) > 0) {
         if (selCamp && !selCamp.has(nkName)) return;
-        campMap[origName] = {A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};
+        campMap[origName] = emptyCats();
       }
     });
     const w = last7();
@@ -2516,7 +2562,7 @@ function groupCatAdset(data) {
     const key   = (camp && camp !== 'Не вказано')
       ? camp + ' · ' + adset
       : adset;
-    if (!m[key]) m[key] = {A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};
+    if (!m[key]) m[key] = emptyCats();
     m[key][normCat(r.category, r.status, r.id)]++;
   });
   return m;
@@ -2744,7 +2790,7 @@ function renderPeriodDim(d, cfg) {
         const pk=mgrGran==='week'?wkKey2(iso):iso.slice(0,7);
         const mgr=kf(r);
         if(!mx[pk]) mx[pk]={};
-        if(!mx[pk][mgr]) mx[pk][mgr]={n:0,A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};
+        if(!mx[pk][mgr]) mx[pk][mgr]={n:0, ...emptyCats()};
         mx[pk][mgr][normCat(r.category, r.status, r.id)]++;
         mx[pk][mgr].n++;
       });
@@ -3273,7 +3319,7 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
     const camp  = (r.campaign||'').trim() || 'Не вказано';
     const adset = (r.adset||'Не вказано').trim();
     const key   = camp + '|' + adset;
-    if (!m[key]) m[key] = {camp, adset, A:0,B:0,C:0,none:0,unproc:0,dup:0};
+    if (!m[key]) m[key] = {camp, adset, ...emptyCats()};
     m[key][normCat(r.category, r.status, r.id)]++;
     if (isDup(r)) m[key].dup++;
   });
@@ -3290,7 +3336,7 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
         if (MS.adset.selected.size && !MS.adset.selected.has(adset)) return;
         // Respect campaign filter: skip spend-only rows for non-selected campaigns
         if (selCamp && !(selCamp.has(nkA(camp)) || selCamp.has(nkA(adset)))) return;
-        m[key] = {camp, adset, A:0,B:0,C:0,none:0,unproc:0};
+        m[key] = {camp, adset, ...emptyCats()};
       }
     });
   }
@@ -3613,7 +3659,7 @@ function initTabs() {
 
 function groupByKey(d, key) {
   const m = {};
-  d.forEach(r => { const k = r[key]||'Не вказано'; if(!m[k]) m[k]={A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0}; m[k][normCat(r.category, r.status, r.id)]++; });
+  d.forEach(r => { const k = r[key]||'Не вказано'; if(!m[k]) m[k]=emptyCats(); m[k][normCat(r.category, r.status, r.id)]++; });
   return m;
 }
 
@@ -3833,6 +3879,24 @@ function resetFilters() {
   }
   ['status','manager','user','campaign','adset','creo','ad_funnel','cat'].forEach(k=>{ MS[k].selected.clear(); });
   initFilters();
+  render();
+}
+
+// Підпис кнопки показує СТАН, а не дію: «Скинути» поруч теж називає себе, і «Без дублів»
+// без галочки читалось як «зараз без дублів», хоча дублі в цифрах були.
+function renderNoDupsBtn() {
+  const b = document.getElementById('btn-no-dups');
+  if (!b) return;
+  b.textContent = (_noDups ? '☑' : '☐') + ' Без дублів';
+  b.title = _noDups
+    ? 'Дублі зараз виключені з усієї вибірки — усі цифри рахуються без них'
+    : 'Увімкнути режим без дублів: дублі підуть з усіх цифр разом';
+  b.style.borderColor = _noDups ? 'var(--accent)' : '';
+  b.style.color       = _noDups ? 'var(--text)'   : '';
+}
+function toggleNoDups() {
+  _noDups = !_noDups;
+  saveUIState();
   render();
 }
 
@@ -4296,7 +4360,7 @@ function renderDaily(d) {
   d.forEach(r => {
     const dt = parseDate(r.date); if (!dt) return;
     const key = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
-    if (!dayMap[key]) dayMap[key] = {A:0,B:0,C:0,none:0,unproc:0,n:0};
+    if (!dayMap[key]) dayMap[key] = {...emptyCats(), n:0};
     dayMap[key][normCat(r.category, r.status, r.id)]++;
     dayMap[key].n++;
   });
@@ -4365,7 +4429,7 @@ function renderDaily(d) {
     const pDM={}, pSp={};
     days.forEach(d2=>{
       const pk=tableGran==='day'?d2:tableGran==='week'?dtWkKey(d2):d2.slice(0,7);
-      if(!pDM[pk]) pDM[pk]={n:0,A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};
+      if(!pDM[pk]) pDM[pk]={n:0, ...emptyCats()};
       const dm=dayMap[d2]||{};
       ['n','A','B','C','none','unproc','noanswer','work'].forEach(k=>{pDM[pk][k]+=(dm[k]||0);});
       pSp[pk]=(pSp[pk]||0)+(spendByDay[d2]||0);
@@ -4471,7 +4535,7 @@ function renderDaily(d) {
       const wm = {}, ws = {};
       days.forEach(d2 => {
         const pk = gran==='week' ? weekKey(d2) : d2.slice(0,7);
-        if (!wm[pk]) wm[pk] = {n:0,A:0,B:0,C:0,none:0,unproc:0,noanswer:0,work:0};
+        if (!wm[pk]) wm[pk] = {n:0, ...emptyCats()};
         const dm = dayMap[d2] || {};
         ['n','A','B','C','none','unproc','noanswer','work'].forEach(k=>{ wm[pk][k]+=(dm[k]||0); });
         ws[pk] = (ws[pk]||0) + (spendByDay[d2]||0);
@@ -5361,25 +5425,25 @@ function renderAnalyst(d) {
   const campMap = {}, creoMap = {}, adsetMapFull = {};
   d.forEach(r => {
     const k = r.campaign||'Не вказано';
-    if (!campMap[k]) campMap[k] = {A:0,B:0,C:0,none:0,unproc:0,n:0};
+    if (!campMap[k]) campMap[k] = {...emptyCats(), n:0};
     campMap[k][normCat(r.category, r.status, r.id)]++; campMap[k].n++;
   });
   d.forEach(r => {
     const k = r.creo||'Не вказано';
-    if (!creoMap[k]) creoMap[k] = {A:0,B:0,C:0,none:0,unproc:0,n:0};
+    if (!creoMap[k]) creoMap[k] = {...emptyCats(), n:0};
     creoMap[k][normCat(r.category, r.status, r.id)]++; creoMap[k].n++;
   });
   d.forEach(r => {
     const camp=(r.campaign||'').trim(), adset=(r.adset||'Не вказано').trim();
     const k = (camp&&camp!=='Не вказано') ? camp+' · '+adset : adset;
-    if (!adsetMapFull[k]) adsetMapFull[k]={A:0,B:0,C:0,none:0,unproc:0,n:0,camp,adset};
+    if (!adsetMapFull[k]) adsetMapFull[k]={...emptyCats(), n:0, camp, adset};
     adsetMapFull[k][normCat(r.category, r.status, r.id)]++; adsetMapFull[k].n++;
   });
 
   const mgrMap = {};
   d.forEach(r => {
     const k = r.manager||'Невідомо';
-    if (!mgrMap[k]) mgrMap[k] = {A:0,B:0,C:0,none:0,unproc:0,n:0,lost:0};
+    if (!mgrMap[k]) mgrMap[k] = {...emptyCats(), n:0, lost:0};
     mgrMap[k][normCat(r.category, r.status, r.id)]++; mgrMap[k].n++;
     if (r.status==='lost') mgrMap[k].lost++;
   });
@@ -5392,7 +5456,7 @@ function renderAnalyst(d) {
       const day = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
       const k = keyFn(r);
       if (!m[k]) m[k] = {};
-      if (!m[k][day]) m[k][day] = {A:0,B:0,C:0,none:0,unproc:0,n:0};
+      if (!m[k][day]) m[k][day] = {...emptyCats(), n:0};
       m[k][day][normCat(r.category, r.status, r.id)]++;
       m[k][day].n++;
     });
@@ -5942,8 +6006,7 @@ function dropDeleted(lists, fresh, since) {
   if (!since) return 0;
   const seen = new Set();
   (fresh || []).forEach(a => (a || []).forEach(r => { if (r && r.id != null) seen.add(String(r.id)); }));
-  const iso = r => { const p = String((r && r.date) || '').split(' ')[0].split('.');
-                     return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : ''; };
+  const iso = r => leadDayISO(r && r.date);
   let gone = 0;
   (lists || []).forEach(l => {
     for (let i = l.length - 1; i >= 0; i--) {
