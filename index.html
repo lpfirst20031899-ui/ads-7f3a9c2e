@@ -293,10 +293,6 @@ tr:hover td{background:var(--surface2)}
   #tbl-managers-matrix{font-size:10px}
 }
 
-.dimflt{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)}
-.dimflt .fg{min-width:150px}
-.dimflt .ms-panel{min-width:300px;max-width:none}
-
 /* Tablet (769px – 1024px) */
 @media(min-width:769px) and (max-width:1024px){
   .kpis{grid-template-columns:repeat(4,1fr)}
@@ -589,7 +585,7 @@ tr:hover td{background:var(--surface2)}
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по кампаніях, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:380px"><canvas id="c-camp-pct"></canvas></div></div></div>
   </div>
   <div id="v-campaigns-table">
-    <div class="cc"><div class="cc-title">Кампанії — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="dimflt-campaigns" class="dimflt"></div><div id="tbl-campaigns"></div></div>
+    <div class="cc"><div class="cc-title">Кампанії — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="tbl-campaigns"></div></div>
   </div>
 
 </div>
@@ -607,7 +603,7 @@ tr:hover td{background:var(--surface2)}
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по адсетах, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:360px"><canvas id="c-adset-pct"></canvas></div></div></div>
   </div>
   <div id="v-adsets-table">
-    <div class="cc"><div class="cc-title">Адсети — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="dimflt-adsets" class="dimflt"></div><div id="adset-min-filter"></div><div id="tbl-adsets"></div></div>
+    <div class="cc"><div class="cc-title">Адсети — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="adset-min-filter"></div><div id="tbl-adsets"></div></div>
   </div>
 
 </div>
@@ -625,7 +621,7 @@ tr:hover td{background:var(--surface2)}
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по крео, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:360px"><canvas id="c-creo-pct"></canvas></div></div></div>
   </div>
   <div id="v-creos-table">
-    <div class="cc"><div class="cc-title">Крео — рейтинг за якістю</div><div class="cc-sub">Клікай по заголовку для сортування · % від кожного крео</div><div id="dimflt-creos" class="dimflt"></div><div id="tbl-creos"></div></div>
+    <div class="cc"><div class="cc-title">Крео — рейтинг за якістю</div><div class="cc-sub">Клікай по заголовку для сортування · % від кожного крео</div><div id="tbl-creos"></div></div>
   </div>
 
 </div>
@@ -1541,6 +1537,14 @@ let _show7d = true;   // колонки «·7д» у Кампаніях, Адс�
 // рахується вся вибірка разом — кількості, відсотки й усі похідні числа, — і вкладки
 // не можуть розійтись між собою (Артем, 23.11.2026).
 let _noDups = false;
+// Вибір галочкою в самій таблиці (Артем, 24.11.2026: «кнопка, яка активує мій вибір
+// з уже готової таблиці»). Галочки з'являються лише коли режим увімкнений: у Кампаніях
+// 144 рядки, і постійна колонка чекбоксів — шум у таблиці, яку читають очима.
+// Вибір пишеться в той самий `MS[key].selected`, що й фільтри зверху, тому каскад
+// (список адсетів → список крео) і застосування до всіх таблиць уже працюють.
+// Розріз → ключ фільтра. Крео в режим не входить: це найнижчий рівень, звужувати ним нічого.
+const PICK_DIMS = { campaigns: 'campaign', adsets: 'adset' };
+let _pickMode = { campaigns: false, adsets: false };
 // Колонки станів заявки — перемикачі ТІЛЬКИ для таблиць розрізів (Кампанії, Адсети,
 // Крео, Менеджери). У закріплених метриках зверху вони висять завжди.
 // Кнопка одна на метрику й тягне обидві її колонки — кількість і відсоток разом
@@ -1579,6 +1583,7 @@ function saveUIState() {
       cmShow:        _cmShow,
       show7d:        _show7d,
       noDups:        _noDups,
+      pickMode:      _pickMode,
       stateCols:     _stateCols,
       lostReasonPct: window._lostReasonPct,
       lostCreoPct:   window._lostCreoPct,
@@ -1609,6 +1614,7 @@ function loadUIState() {
     if (s.cmShow) Object.assign(_cmShow, s.cmShow);
     if (s.show7d !== undefined) _show7d = s.show7d;
     if (s.noDups !== undefined) _noDups = s.noDups;
+    if (s.pickMode) _pickMode = Object.assign({campaigns:false, adsets:false}, s.pickMode);
     if (s.lostReasonPct !== undefined) window._lostReasonPct = s.lostReasonPct;
     if (s.lostCreoPct   !== undefined) window._lostCreoPct   = s.lostCreoPct;
     if (s.lostCampPct   !== undefined) window._lostCampPct   = s.lostCampPct;
@@ -2100,7 +2106,9 @@ const TABLE_COLS = {};
 
 function makeTable(containerId, colDefs, rows, stateKey) {
   TABLE_COLS[stateKey] = colDefs;
-  if (!sortState[stateKey]) sortState[stateKey] = {col: colDefs[0].key, dir:'desc'};
+  const sortable = colDefs.filter(c => c.key !== 'pick');
+  if (!sortState[stateKey]) sortState[stateKey] = {col: sortable[0].key, dir:'desc'};
+  if (sortState[stateKey].col === 'pick') sortState[stateKey].col = sortable[0].key;
   const st = sortState[stateKey];
 
   const sorted = [...rows].sort((a,b)=>{
@@ -2113,7 +2121,8 @@ function makeTable(containerId, colDefs, rows, stateKey) {
   colDefs.forEach(col=>{
     const cls=st.col===col.key?(st.dir==='asc'?'sort-asc':'sort-desc'):'';
     const sepStyle = col.sep ? `style="${SEP};opacity:.7"` : '';
-    html+=`<th class="${cls}" ${sepStyle} onclick="onSortClick('${containerId}','${col.key}','${stateKey}')">${col.label}<span class="sort-arrow"></span></th>`;
+    const click = col.key === 'pick' ? '' : ` onclick="onSortClick('${containerId}','${col.key}','${stateKey}')"`;
+    html+=`<th class="${cls}" ${sepStyle}${click}>${col.label}${col.key === 'pick' ? '' : '<span class="sort-arrow"></span>'}</th>`;
   });
   html+='</tr></thead><tbody>';
   sorted.forEach(row=>{
@@ -2141,7 +2150,6 @@ function barCell(val, pctVal, color) {
 
 // ─── Main render ───────────────────────────────────────
 function render() {
-  renderDimFilters();
   renderNoDupsBtn();
   saveUIState();
   // Вік кеша статусів — на самій кнопці: бейджі гаснуть через FB_STATUS_TTL_H, і без
@@ -3242,9 +3250,17 @@ function makeDimTable(containerId, cols, rows, stateKey, lbl) {
     ` title="Показати / сховати «${m.title}» (кількість і %) у цій таблиці. На закріплені метрики зверху не впливає."` +
     ` onclick="_stateCols.${m.key}=!_stateCols.${m.key};render()">${m.btn}</button>`).join('');
   const st7 = lbl ? `<button class="vt-btn t7-btn${_show7d?' active':''}" title="Показати / сховати колонки за останні 7 днів" onclick="_show7d=!_show7d;render()">Останні 7 днів · ${lbl}</button>` : '';
+  const pickKey = PICK_DIMS[stateKey];
+  const nSel = pickKey ? MS[pickKey].selected.size : 0;
+  const pickBtn = pickKey
+    ? `<button class="vt-btn pick-btn${_pickMode[stateKey]?' active':''}"`
+      + ` title="Увімкнути галочки в таблиці: вибрані рядки звужують блоки нижче (Адсети, Крео) і всі цифри"`
+      + ` onclick="togglePick('${stateKey}')">${_pickMode[stateKey]?'☑':'☐'} Вибір</button>`
+      + (nSel ? `<button class="vt-btn" title="Зняти вибір" onclick="msNone('${pickKey}')">✕ ${nSel} вибрано</button>` : '')
+    : '';
   // Ні кнопок, ні вікна «7 днів» — не малюємо й порожню смужку над таблицею.
-  const bar = stBtns || st7
-    ? `<div class="view-toggle" style="display:inline-flex;flex-wrap:wrap;margin-bottom:8px">${stBtns}${st7}</div>`
+  const bar = stBtns || st7 || pickBtn
+    ? `<div class="view-toggle" style="display:inline-flex;flex-wrap:wrap;margin-bottom:8px">${pickBtn}${stBtns}${st7}</div>`
     : '';
   document.getElementById(containerId).insertAdjacentHTML('afterbegin', bar);
 }
@@ -3277,7 +3293,10 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
             cplB: (bLeads&&sp)?sp/bLeads:0,
             ...metrics7(w7?.map[name], w7?.spend[nk(name)]) };
   });
-  const cols=[
+  const cols=[];
+  if (_pickMode[stateKey] && PICK_DIMS[stateKey])
+    cols.push({key:'pick', label:'☑', fn:r=>pickCell(PICK_DIMS[stateKey], r.name)});
+  cols.push(
     {key:'name',   label:'Назва',      fn:r=>`${statusMap?fbStatusBadge(statusMap,r.name):''}<span style="font-size:11px;font-weight:600">${escHtml(r.name)}</span>`},
     {key:'total',  label:'Всього',     fn:r=>`<strong>${r.total}</strong>`},
     {key:'A',      label:'A (кіл.)',   fn:r=>`<span style="color:var(--a);font-weight:700">${r.A}</span>`},
@@ -3294,7 +3313,7 @@ function renderDimTable(containerId, stateKey, map, spendMap, aMap, forceSpend=f
     {key:'pW',      label:'У квал. %',  fn:r=>barCell(r.work, r.pW, 'var(--work)')},
     {key:'none',    label:'Без кат.',   fn:r=>`<span style="color:var(--none)">${r.none}</span>`},
     {key:'pN',      label:'Без кат. %', fn:r=>barCell(r.none, r.pN, 'var(--none)')},
-  ];
+  );
   if (extra) {
     const tLost = 'Скільки заявок області вже закрито. Це НЕ окрема категорія: програна заявка з категорією A рахується і в «A», і тут.';
     cols.push({key:'lostN', label:`<span title="${tLost}">З них програні</span>`, sep:true, fn:r=>`<span style="color:var(--lost)">${r.lostN}</span>`},
@@ -3377,7 +3396,10 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
   // до: metric > 0 AND metric <= maxV (нулі = немає даних — виключаємо)
   if (!isNaN(_maxV)) rows = rows.filter(r => (r[_minM]||0) > 0 && (r[_minM]||0) <= _maxV);
   const _campStatus = fbGetCampaignStatus(), _adsetStatus = fbGetAdsetStatus();
-  const cols = [
+  const cols = [];
+  if (_pickMode[stateKey] && PICK_DIMS[stateKey])
+    cols.push({key:'pick', label:'☑', fn:r=>pickCell(PICK_DIMS[stateKey], r.adset)});
+  cols.push(
     {key:'camp',   label:'Кампанія',   fn:r=>`${fbStatusBadge(_campStatus,r.camp)}<span style="color:var(--muted);font-size:11px;white-space:nowrap">${escHtml(r.camp)}</span>`},
     {key:'adset',  label:'Адсет',      fn:r=>`${fbStatusBadge(_adsetStatus,r.adset)}<span style="font-size:11px;font-weight:600">${escHtml(r.adset)}</span>`},
     {key:'total',  label:'Всього',     fn:r=>`<strong>${r.total}</strong>`},
@@ -3395,7 +3417,7 @@ function renderAdsetDimTable(containerId, stateKey, data, spendMap, aMap, campAd
     {key:'pW',      label:'У квал. %',  fn:r=>barCell(r.work, r.pW, 'var(--work)')},
     {key:'none',    label:'Без кат.',   fn:r=>`<span style="color:var(--none)">${r.none}</span>`},
     {key:'pN',      label:'Без кат. %', fn:r=>barCell(r.none, r.pN, 'var(--none)')},
-  ];
+  );
   if (hasSpend) {
     cols.push({key:'sp',   label:'Витрати $', sep:true, fn:r=>spendCell(r.sp)});
     cols.push({key:'cpl',  label:'CPL $',               fn:r=>cplCell(r.cpl)});
@@ -3887,37 +3909,6 @@ function resetFilters() {
   render();
 }
 
-// Мультиселект усередині блоку розрізу. Розмітка та сама, що в рядку фільтрів, і стан
-// той самий (`MS[key]`), тому каскад працює без окремого коду: вибір кампанії звужує
-// список адсетів (`rebuildAdsetOptions`), вибір адсета — список крео, а `filterData`
-// застосовує вибір до всіх таблиць і цін разом.
-const DIM_FILTERS = {
-  campaigns: [['campaign', 'Кампанія']],
-  adsets:    [['campaign', 'Кампанія'], ['adset', 'Адсет']],
-  creos:     [['campaign', 'Кампанія'], ['adset', 'Адсет'], ['creo', 'Крео']],
-};
-function msWidget(key, label) {
-  return `<div class="fg"><span class="fl">${label}</span>
-    <div class="ms">
-      <div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" data-ms-badge="${key}"></span><span class="ms-arrow">▾</span></div>
-      <div class="ms-panel">
-        <div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div>
-        <div class="ms-actions"><span class="ms-action" onclick="msAll('${key}')">Всі</span><span class="ms-action" onclick="msNone('${key}')">Жодного</span></div>
-        <div class="ms-list" data-ms-list="${key}"></div>
-      </div>
-    </div></div>`;
-}
-// Малюємо ОДИН раз: перемальовування на кожен render() закривало б відкриту панель
-// і гасило набраний у пошуку текст просто від кліку по чекбоксу.
-function renderDimFilters() {
-  for (const [tab, keys] of Object.entries(DIM_FILTERS)) {
-    const box = document.getElementById('dimflt-' + tab);
-    if (!box || box.children.length) continue;
-    box.innerHTML = keys.map(([k, l]) => msWidget(k, l)).join('');
-    keys.forEach(([k]) => buildMs(k, MS[k].all));
-  }
-}
-
 // Підпис кнопки показує СТАН, а не дію: «Скинути» поруч теж називає себе, і «Без дублів»
 // без галочки читалось як «зараз без дублів», хоча дублі в цифрах були.
 function renderNoDupsBtn() {
@@ -3929,6 +3920,19 @@ function renderNoDupsBtn() {
     : 'Увімкнути режим без дублів: дублі підуть з усіх цифр разом';
   b.style.borderColor = _noDups ? 'var(--accent)' : '';
   b.style.color       = _noDups ? 'var(--text)'   : '';
+}
+// Режим живе окремо на кожен розріз: у Кампаніях і Адсетах вибирають різні речі.
+function togglePick(dim) {
+  _pickMode[dim] = !_pickMode[dim];
+  saveUIState();
+  render();
+}
+// Галочка рядка. `value` — саме те ім'я, яким фільтрує `filterData` (воно ж ключ у MS),
+// тому вибір із таблиці й вибір зі списку зверху — одне й те саме.
+function pickCell(key, val) {
+  return `<input type="checkbox" value="${escHtml(val)}" ${MS[key].selected.has(val)?'checked':''}`
+       + ` title="Вибрати для фільтра" style="cursor:pointer;margin:0 2px"`
+       + ` onchange="msToggle('${key}', this.value, this.checked)">`;
 }
 function toggleNoDups() {
   _noDups = !_noDups;
