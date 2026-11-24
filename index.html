@@ -44,7 +44,7 @@ input[type=date]:focus{border-color:var(--accent)}
 
 /* ─── Multi-select ─── */
 .ms{position:relative}
-.ms-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px;min-width:120px;white-space:nowrap;transition:border-color .15s;user-select:none}
+.ms-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px;min-width:96px;white-space:nowrap;transition:border-color .15s;user-select:none}
 .ms-btn:hover,.ms.open .ms-btn{border-color:var(--accent)}
 .ms-badge{background:var(--accent);color:#0e1129;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;display:none}
 .ms-badge.vis{display:inline}
@@ -498,7 +498,7 @@ tr:hover td{background:var(--surface2)}
 
 <!-- Filters -->
 <div class="filters">
-  <div class="fg" style="min-width:185px">
+  <div class="fg" style="min-width:158px">
     <span class="fl">Період</span>
     <div class="drp" id="drp">
       <button class="drp-btn" id="drp-display" onclick="drpToggle()">
@@ -523,17 +523,16 @@ tr:hover td{background:var(--surface2)}
   </div>
   <div class="fg"><span class="fl">Менеджер</span><div class="ms" id="ms-manager"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-manager-badge" data-ms-badge="manager"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-manager')">Всі</span><span class="ms-action" onclick="msNone('ms-manager')">Жодного</span></div><div class="ms-list" id="ms-manager-list" data-ms-list="manager"></div></div></div></div>
   <div class="fg"><span class="fl">Рекламіст</span><div class="ms" id="ms-user"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-user-badge" data-ms-badge="user"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-user')">Всі</span><span class="ms-action" onclick="msNone('ms-user')">Жодного</span></div><div class="ms-list" id="ms-user-list" data-ms-list="user"></div></div></div></div>
-  <div class="fg" style="min-width:180px"><span class="fl">Кампанія</span><div class="ms" id="ms-campaign"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-campaign-badge" data-ms-badge="campaign"></span><span class="ms-arrow">▾</span></div><div class="ms-panel" style="min-width:280px;max-width:none"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-campaign')">Всі</span><span class="ms-action" onclick="msNone('ms-campaign')">Жодного</span></div><div class="ms-list" id="ms-campaign-list" data-ms-list="campaign"></div></div></div></div>
+  <div class="fg" style="min-width:150px"><span class="fl">Кампанія</span><div class="ms" id="ms-campaign"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-campaign-badge" data-ms-badge="campaign"></span><span class="ms-arrow">▾</span></div><div class="ms-panel" style="min-width:280px;max-width:none"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-campaign')">Всі</span><span class="ms-action" onclick="msNone('ms-campaign')">Жодного</span></div><div class="ms-list" id="ms-campaign-list" data-ms-list="campaign"></div></div></div></div>
   <div class="fg"><span class="fl">Адсет</span><div class="ms" id="ms-adset"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-adset-badge" data-ms-badge="adset"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-adset')">Всі</span><span class="ms-action" onclick="msNone('ms-adset')">Жодного</span></div><div class="ms-list" id="ms-adset-list" data-ms-list="adset"></div></div></div></div>
   <div class="fg"><span class="fl">Крео</span><div class="ms" id="ms-creo"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-creo-badge" data-ms-badge="creo"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-creo')">Всі</span><span class="ms-action" onclick="msNone('ms-creo')">Жодного</span></div><div class="ms-list" id="ms-creo-list" data-ms-list="creo"></div></div></div></div>
-  <div class="fg"><span class="fl">Рекл. воронка</span><div class="ms" id="ms-ad_funnel"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-ad_funnel-badge" data-ms-badge="ad_funnel"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-ad_funnel')">Всі</span><span class="ms-action" onclick="msNone('ms-ad_funnel')">Жодного</span></div><div class="ms-list" id="ms-ad_funnel-list" data-ms-list="ad_funnel"></div></div></div></div>
+  <div class="fg"><span class="fl">Воронка</span><div class="ms" id="ms-ad_funnel"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-ad_funnel-badge" data-ms-badge="ad_funnel"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-ad_funnel')">Всі</span><span class="ms-action" onclick="msNone('ms-ad_funnel')">Жодного</span></div><div class="ms-list" id="ms-ad_funnel-list" data-ms-list="ad_funnel"></div></div></div></div>
   <div class="fg"><span class="fl">Категорія</span><div class="ms" id="ms-cat"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-cat-badge" data-ms-badge="cat"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-cat')">Всі</span><span class="ms-action" onclick="msNone('ms-cat')">Жодного</span></div><div class="ms-list" id="ms-cat-list" data-ms-list="cat"></div></div></div></div>
   <!-- Кнопки в РЯД: .fg за замовчуванням column, і «Без дублів» зі «Скинути» ставали
        один під одним — рядок фільтрів виходив у три рівні замість двох. -->
   <div class="fg" style="flex-direction:row;align-items:flex-end;justify-content:flex-end;padding-top:14px;gap:8px">
     <button class="btn-reset" id="btn-only-active" onclick="toggleOnlyActive()"></button>
     <button class="btn-reset" id="btn-no-dups" onclick="toggleNoDups()"></button>
-    <button class="btn-reset" onclick="resetFilters()">↺ Скинути</button>
   </div>
 </div>
 <!-- KPIs -->
@@ -3920,25 +3919,8 @@ function initFilters() {
   buildMs('ad_funnel', uniqField('ad_funnel'));
 }
 
-function resetFilters() {
-  const dates = DATA.map(r => { try { const[dd,mm,yyyy]=r.date.split(' ')[0].split('.'); return new Date(+yyyy,+mm-1,+dd); } catch{return null;} }).filter(Boolean).sort((a,b)=>a-b);
-  if (dates.length) {
-    drpStart = dates[0]; drpEnd = dates[dates.length-1]; drpSelecting = false;
-    drpViewLeft = new Date(drpStart.getFullYear(), drpStart.getMonth(), 1);
-    drpApply();
-  } else {
-    drpStart = null; drpEnd = null;
-    document.getElementById('f-from').value = '';
-    document.getElementById('f-to').value   = '';
-    document.getElementById('drp-label').textContent = 'Оберіть діапазон';
-  }
-  ['manager','user','campaign','adset','creo','ad_funnel','cat'].forEach(k=>{ MS[k].selected.clear(); });
-  initFilters();
-  render();
-}
-
-// Підпис кнопки показує СТАН, а не дію: «Скинути» поруч теж називає себе, і «Без дублів»
-// без галочки читалось як «зараз без дублів», хоча дублі в цифрах були.
+// Підпис кнопки показує СТАН, а не дію: «Без дублів» без галочки читалось як
+// «зараз без дублів», хоча дублі в цифрах були.
 function renderNoDupsBtn() {
   const b = document.getElementById('btn-no-dups');
   if (!b) return;
