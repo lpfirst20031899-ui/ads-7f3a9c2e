@@ -456,7 +456,7 @@ tr:hover td{background:var(--surface2)}
       </button>
     </div>
     <div style="font-size:10px;color:var(--muted);margin-top:6px">
-      Потрібен User Access Token з правом <code style="color:var(--accent)">ads_read</code>. Отримай на <a href="https://developers.facebook.com/tools/accesstoken" target="_blank" style="color:#1877f2">developers.facebook.com/tools/accesstoken</a> → User Token.
+      Потрібен User Access Token з правами <code style="color:var(--accent)">ads_read</code> і <code style="color:var(--accent)">business_management</code> від користувача, який є адміном усіх Business Manager — тоді підтягуються всі кабінети всіх BM, у тому числі нові. Отримай на <a href="https://developers.facebook.com/tools/accesstoken" target="_blank" style="color:#1877f2">developers.facebook.com/tools/accesstoken</a> → User Token.
     </div>
   </div>
 </div>
@@ -531,6 +531,7 @@ tr:hover td{background:var(--surface2)}
   <!-- Кнопки в РЯД: .fg за замовчуванням column, і «Без дублів» зі «Скинути» ставали
        один під одним — рядок фільтрів виходив у три рівні замість двох. -->
   <div class="fg" style="flex-direction:row;align-items:flex-end;justify-content:flex-end;padding-top:14px;gap:8px">
+    <button class="btn-reset" id="btn-only-active" onclick="toggleOnlyActive()"></button>
     <button class="btn-reset" id="btn-no-dups" onclick="toggleNoDups()"></button>
     <button class="btn-reset" onclick="resetFilters()">↺ Скинути</button>
   </div>
@@ -1545,6 +1546,11 @@ let _noDups = false;
 // Розріз → ключ фільтра. Крео в режим не входить: це найнижчий рівень, звужувати ним нічого.
 const PICK_DIMS = { campaigns: 'campaign', adsets: 'adset' };
 let _pickMode = { campaigns: false, adsets: false };
+// «Тільки активні» (Артем, 24.11.2026). Такий фільтр уже був і був знятий 26.09.2026 —
+// тепер повернений з двома відмінностями: кнопка САМА тягне статуси, якщо кеш
+// прострочений (інакше фільтр показував би вчорашній стан як поточний), і фільтрує
+// ВИБІРКУ, а не рядки таблиць, тому розрізи й далі сходяться із «Всього лідів».
+let _onlyActive = false;
 // Колонки станів заявки — перемикачі ТІЛЬКИ для таблиць розрізів (Кампанії, Адсети,
 // Крео, Менеджери). У закріплених метриках зверху вони висять завжди.
 // Кнопка одна на метрику й тягне обидві її колонки — кількість і відсоток разом
@@ -1584,6 +1590,7 @@ function saveUIState() {
       show7d:        _show7d,
       noDups:        _noDups,
       pickMode:      _pickMode,
+      onlyActive:    _onlyActive,
       stateCols:     _stateCols,
       lostReasonPct: window._lostReasonPct,
       lostCreoPct:   window._lostCreoPct,
@@ -1615,6 +1622,7 @@ function loadUIState() {
     if (s.show7d !== undefined) _show7d = s.show7d;
     if (s.noDups !== undefined) _noDups = s.noDups;
     if (s.pickMode) _pickMode = Object.assign({campaigns:false, adsets:false}, s.pickMode);
+    if (s.onlyActive !== undefined) _onlyActive = s.onlyActive;
     if (s.lostReasonPct !== undefined) window._lostReasonPct = s.lostReasonPct;
     if (s.lostCreoPct   !== undefined) window._lostCreoPct   = s.lostCreoPct;
     if (s.lostCampPct   !== undefined) window._lostCampPct   = s.lostCampPct;
@@ -1925,8 +1933,27 @@ function filterData() {
     if (MS.ad_funnel.selected.size && !MS.ad_funnel.selected.has(r.ad_funnel||'Не вказано')) return false;
     if (MS.cat.selected.size      && !MS.cat.selected.has(normCat(r.category, r.status, r.id)))    return false;
     if (_noDups && isDup(r)) return false;
+    if (_onlyActive && !adIsActive(r)) return false;
     return true;
   });
+}
+
+// Заявка «зараз працює», якщо кожен її рівень, статус якого ВІДОМИЙ, активний у FB.
+// Невідомий рівень не блокує: матч іде за назвою, і крео з CRM часто не сходиться з
+// `ad_name` у кабінеті — інакше режим гасив би майже всі заявки, а не вимкнені елементи.
+// Рівень без кеша взагалі (кнопку не тягнули) теж не блокує — про це каже сама кнопка.
+function adIsActive(r) {
+  const st = (map, name) => {
+    if (!map) return null;
+    const k = (name || '').trim().toLowerCase();
+    if (!k || k === 'не вказано') return null;
+    const v = map[k] || map['#' + k];
+    return v === undefined ? null : v === 'ACTIVE';
+  };
+  const vals = [st(fbGetCampaignStatus(), r.campaign),
+                st(fbGetAdsetStatus(),    r.adset),
+                st(fbGetCreoStatus(),     r.creo)].filter(v => v !== null);
+  return vals.length ? vals.every(Boolean) : false;
 }
 
 // ─── Grouping ──────────────────────────────────────────
@@ -2151,6 +2178,7 @@ function barCell(val, pctVal, color) {
 // ─── Main render ───────────────────────────────────────
 function render() {
   renderNoDupsBtn();
+  renderOnlyActiveBtn();
   saveUIState();
   // Вік кеша статусів — на самій кнопці: бейджі гаснуть через FB_STATUS_TTL_H, і без
   // підпису незрозуміло, чому кружечків немає.
@@ -3933,6 +3961,42 @@ function pickCell(key, val) {
   return `<input type="checkbox" value="${escHtml(val)}" ${MS[key].selected.has(val)?'checked':''}`
        + ` title="Вибрати для фільтра" style="cursor:pointer;margin:0 2px"`
        + ` onchange="msToggle('${key}', this.value, this.checked)">`;
+}
+// Підпис показує стан, title — вік статусів: «зараз працює» рахується з кеша, і без дати
+// незрозуміло, на який момент він правдивий.
+function renderOnlyActiveBtn() {
+  const b = document.getElementById('btn-only-active');
+  if (!b) return;
+  b.textContent = (_onlyActive ? '🟢' : '⚪') + ' Тільки активні';
+  b.title = _onlyActive
+    ? `Лишились лише кампанії, адсети й крео, активні у FB (${fbStatusAgeLabel()})`
+    : 'Показати тільки те, що працює зараз: кнопка сама тягне свіжі статуси FB, якщо кеш прострочений';
+  b.style.borderColor = _onlyActive ? 'var(--a)' : '';
+  b.style.color       = _onlyActive ? 'var(--text)' : '';
+}
+// Вмикаючи режим, статуси тягнемо САМІ, якщо кеш прострочений (FB_STATUS_TTL_H): інакше
+// «зараз працює» означало б «працювало, коли останній раз тиснули кнопку статусів».
+async function toggleOnlyActive() {
+  if (_onlyActive) { _onlyActive = false; saveUIState(); render(); return; }
+  const btn = document.getElementById('btn-only-active');
+  if (!fbStatusFresh() && typeof fbSyncCampaignStatus === 'function') {
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Статуси FB…'; }
+    try { await fbSyncCampaignStatus(); } catch (e) { console.warn('статуси FB:', e); }
+    if (btn) btn.disabled = false;
+  }
+  // Порожній кеш не вмикаємо: фільтр лишив би нуль заявок, і це читалось би як «нічого не
+  // працює», хоча насправді статуси просто не приїхали (немає токена, впали права).
+  const store = _fbStatusStore();
+  const have = ['camp','adset','creo'].some(k => Object.keys(store[k] || {}).length);
+  if (!have || !fbStatusFresh()) {
+    renderOnlyActiveBtn();
+    alert('Статуси FB не завантажились — фільтр «Тільки активні» не увімкнено.\n'
+        + fbStatusAgeLabel() + '. Перевір токен у панелі 📘 FB Ads.');
+    return;
+  }
+  _onlyActive = true;
+  saveUIState();
+  render();
 }
 function toggleNoDups() {
   _noDups = !_noDups;
@@ -7406,25 +7470,24 @@ async function startFBSync(mode = 'full') {
         let accsAll = await fetchAccountPages(
           `${FB_API}/me/adaccounts?fields=id,name,account_status&limit=200&access_token=${token}`
         );
-        // 2) Business Manager accounts (if personal returned empty)
-        if (!accsAll.length) {
-          setFBStatus(`[${ti+1}/${tokens.length}] ${label}: перевіряю Business Manager...`, 'var(--muted)');
-          try {
-            const bizJ = await fbGraphJSON(`${FB_API}/me/businesses?fields=id,name&limit=50&access_token=${token}`);
-            const businesses = bizJ.data || [];
-            for (const biz of businesses) {
-              const bizAccs = await fetchAccountPages(
-                `${FB_API}/${biz.id}/owned_ad_accounts?fields=id,name,account_status&limit=200&access_token=${token}`
-              );
-              accsAll = accsAll.concat(bizAccs);
-              if (!bizAccs.length) {
-                const clientAccs = await fetchAccountPages(
-                  `${FB_API}/${biz.id}/client_ad_accounts?fields=id,name,account_status&limit=200&access_token=${token}`
-                );
-                accsAll = accsAll.concat(clientAccs);
-              }
+        // 2) Кабінети всіх Business Manager токена — опитуємо завжди, а не лише коли
+        // me/adaccounts порожній: один особистий кабінет у токені ховав усі кабінети BM
+        // (живцем 1 кабінет замість 7 на двох BM). Дублі знімає seenAccountIds нижче.
+        setFBStatus(`[${ti+1}/${tokens.length}] ${label}: перевіряю Business Manager...`, 'var(--muted)');
+        try {
+          const bizJ = await fbGraphJSON(`${FB_API}/me/businesses?fields=id,name&limit=50&access_token=${token}`);
+          for (const biz of bizJ.data || []) {
+            // owned — кабінети самого BM, client — віддані партнером; беремо обидва списки:
+            // BM з власними кабінетами теж може мати партнерські.
+            for (const edge of ['owned_ad_accounts', 'client_ad_accounts']) {
+              accsAll = accsAll.concat(await fetchAccountPages(
+                `${FB_API}/${biz.id}/${edge}?fields=id,name,account_status&limit=200&access_token=${token}`
+              ));
             }
-          } catch(e2) { throw e2; }
+          }
+        } catch (e2) {
+          // Токен без business_management падає тут; якщо особисті кабінети вже є — не ламаємо прогін.
+          if (!accsAll.length) throw e2;
         }
         if (!accsAll.length) {
           setFBStatus(`⚠ ${label}: кабінетів не знайдено. Перевір права ads_read або доступ до Business Manager`, 'var(--c)');
