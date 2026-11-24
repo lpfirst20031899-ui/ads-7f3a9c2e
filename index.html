@@ -293,6 +293,10 @@ tr:hover td{background:var(--surface2)}
   #tbl-managers-matrix{font-size:10px}
 }
 
+.dimflt{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.dimflt .fg{min-width:150px}
+.dimflt .ms-panel{min-width:300px;max-width:none}
+
 /* Tablet (769px – 1024px) */
 @media(min-width:769px) and (max-width:1024px){
   .kpis{grid-template-columns:repeat(4,1fr)}
@@ -521,13 +525,13 @@ tr:hover td{background:var(--surface2)}
     <input type="hidden" id="f-from">
     <input type="hidden" id="f-to">
   </div>
-  <div class="fg"><span class="fl">Менеджер</span><div class="ms" id="ms-manager"><div class="ms-btn" onclick="toggleMs('ms-manager')">Всі<span class="ms-badge" id="ms-manager-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-manager',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-manager')">Всі</span><span class="ms-action" onclick="msNone('ms-manager')">Жодного</span></div><div class="ms-list" id="ms-manager-list"></div></div></div></div>
-  <div class="fg"><span class="fl">Рекламіст</span><div class="ms" id="ms-user"><div class="ms-btn" onclick="toggleMs('ms-user')">Всі<span class="ms-badge" id="ms-user-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-user')">Всі</span><span class="ms-action" onclick="msNone('ms-user')">Жодного</span></div><div class="ms-list" id="ms-user-list"></div></div></div></div>
-  <div class="fg" style="min-width:180px"><span class="fl">Кампанія</span><div class="ms" id="ms-campaign"><div class="ms-btn" onclick="toggleMs('ms-campaign')">Всі<span class="ms-badge" id="ms-campaign-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel" style="min-width:280px;max-width:none"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-campaign',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-campaign')">Всі</span><span class="ms-action" onclick="msNone('ms-campaign')">Жодного</span></div><div class="ms-list" id="ms-campaign-list"></div></div></div></div>
-  <div class="fg"><span class="fl">Адсет</span><div class="ms" id="ms-adset"><div class="ms-btn" onclick="toggleMs('ms-adset')">Всі<span class="ms-badge" id="ms-adset-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-adset',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-adset')">Всі</span><span class="ms-action" onclick="msNone('ms-adset')">Жодного</span></div><div class="ms-list" id="ms-adset-list"></div></div></div></div>
-  <div class="fg"><span class="fl">Крео</span><div class="ms" id="ms-creo"><div class="ms-btn" onclick="toggleMs('ms-creo')">Всі<span class="ms-badge" id="ms-creo-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-creo',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-creo')">Всі</span><span class="ms-action" onclick="msNone('ms-creo')">Жодного</span></div><div class="ms-list" id="ms-creo-list"></div></div></div></div>
-  <div class="fg"><span class="fl">Рекл. воронка</span><div class="ms" id="ms-ad_funnel"><div class="ms-btn" onclick="toggleMs('ms-ad_funnel')">Всі<span class="ms-badge" id="ms-ad_funnel-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearch('ms-ad_funnel',this.value)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-ad_funnel')">Всі</span><span class="ms-action" onclick="msNone('ms-ad_funnel')">Жодного</span></div><div class="ms-list" id="ms-ad_funnel-list"></div></div></div></div>
-  <div class="fg"><span class="fl">Категорія</span><div class="ms" id="ms-cat"><div class="ms-btn" onclick="toggleMs('ms-cat')">Всі<span class="ms-badge" id="ms-cat-badge"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-cat')">Всі</span><span class="ms-action" onclick="msNone('ms-cat')">Жодного</span></div><div class="ms-list" id="ms-cat-list"></div></div></div></div>
+  <div class="fg"><span class="fl">Менеджер</span><div class="ms" id="ms-manager"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-manager-badge" data-ms-badge="manager"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-manager')">Всі</span><span class="ms-action" onclick="msNone('ms-manager')">Жодного</span></div><div class="ms-list" id="ms-manager-list" data-ms-list="manager"></div></div></div></div>
+  <div class="fg"><span class="fl">Рекламіст</span><div class="ms" id="ms-user"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-user-badge" data-ms-badge="user"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-user')">Всі</span><span class="ms-action" onclick="msNone('ms-user')">Жодного</span></div><div class="ms-list" id="ms-user-list" data-ms-list="user"></div></div></div></div>
+  <div class="fg" style="min-width:180px"><span class="fl">Кампанія</span><div class="ms" id="ms-campaign"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-campaign-badge" data-ms-badge="campaign"></span><span class="ms-arrow">▾</span></div><div class="ms-panel" style="min-width:280px;max-width:none"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-campaign')">Всі</span><span class="ms-action" onclick="msNone('ms-campaign')">Жодного</span></div><div class="ms-list" id="ms-campaign-list" data-ms-list="campaign"></div></div></div></div>
+  <div class="fg"><span class="fl">Адсет</span><div class="ms" id="ms-adset"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-adset-badge" data-ms-badge="adset"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-adset')">Всі</span><span class="ms-action" onclick="msNone('ms-adset')">Жодного</span></div><div class="ms-list" id="ms-adset-list" data-ms-list="adset"></div></div></div></div>
+  <div class="fg"><span class="fl">Крео</span><div class="ms" id="ms-creo"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-creo-badge" data-ms-badge="creo"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-creo')">Всі</span><span class="ms-action" onclick="msNone('ms-creo')">Жодного</span></div><div class="ms-list" id="ms-creo-list" data-ms-list="creo"></div></div></div></div>
+  <div class="fg"><span class="fl">Рекл. воронка</span><div class="ms" id="ms-ad_funnel"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-ad_funnel-badge" data-ms-badge="ad_funnel"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-ad_funnel')">Всі</span><span class="ms-action" onclick="msNone('ms-ad_funnel')">Жодного</span></div><div class="ms-list" id="ms-ad_funnel-list" data-ms-list="ad_funnel"></div></div></div></div>
+  <div class="fg"><span class="fl">Категорія</span><div class="ms" id="ms-cat"><div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" id="ms-cat-badge" data-ms-badge="cat"></span><span class="ms-arrow">▾</span></div><div class="ms-panel"><div class="ms-actions"><span class="ms-action" onclick="msAll('ms-cat')">Всі</span><span class="ms-action" onclick="msNone('ms-cat')">Жодного</span></div><div class="ms-list" id="ms-cat-list" data-ms-list="cat"></div></div></div></div>
   <!-- Кнопки в РЯД: .fg за замовчуванням column, і «Без дублів» зі «Скинути» ставали
        один під одним — рядок фільтрів виходив у три рівні замість двох. -->
   <div class="fg" style="flex-direction:row;align-items:flex-end;justify-content:flex-end;padding-top:14px;gap:8px">
@@ -585,7 +589,7 @@ tr:hover td{background:var(--surface2)}
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по кампаніях, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:380px"><canvas id="c-camp-pct"></canvas></div></div></div>
   </div>
   <div id="v-campaigns-table">
-    <div class="cc"><div class="cc-title">Кампанії — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="tbl-campaigns"></div></div>
+    <div class="cc"><div class="cc-title">Кампанії — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="dimflt-campaigns" class="dimflt"></div><div id="tbl-campaigns"></div></div>
   </div>
 
 </div>
@@ -603,7 +607,7 @@ tr:hover td{background:var(--surface2)}
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по адсетах, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:360px"><canvas id="c-adset-pct"></canvas></div></div></div>
   </div>
   <div id="v-adsets-table">
-    <div class="cc"><div class="cc-title">Адсети — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="adset-min-filter"></div><div id="tbl-adsets"></div></div>
+    <div class="cc"><div class="cc-title">Адсети — детальна таблиця</div><div class="cc-sub">Клікай по заголовку для сортування</div><div id="dimflt-adsets" class="dimflt"></div><div id="adset-min-filter"></div><div id="tbl-adsets"></div></div>
   </div>
 
 </div>
@@ -621,7 +625,7 @@ tr:hover td{background:var(--surface2)}
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по крео, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:360px"><canvas id="c-creo-pct"></canvas></div></div></div>
   </div>
   <div id="v-creos-table">
-    <div class="cc"><div class="cc-title">Крео — рейтинг за якістю</div><div class="cc-sub">Клікай по заголовку для сортування · % від кожного крео</div><div id="tbl-creos"></div></div>
+    <div class="cc"><div class="cc-title">Крео — рейтинг за якістю</div><div class="cc-sub">Клікай по заголовку для сортування · % від кожного крео</div><div id="dimflt-creos" class="dimflt"></div><div id="tbl-creos"></div></div>
   </div>
 
 </div>
@@ -1635,15 +1639,19 @@ const MS = {
   cat:      {selected: new Set(), all: ['A','B','C','none','unproc','noanswer','work'], labels:{'A':'Категорія A','B':'Категорія B','C':'Категорія C','none':'Без категорії','unproc':'Не оброблені','noanswer':'Недодзвон','work':'У кваліфікації'}},
 };
 
+// Один і той самий мультиселект живе на сторінці в кількох екземплярах: у рядку фільтрів
+// і всередині блоків Кампанії / Адсети / Крео (Артем, 23.11.2026 — вибирати кампанію,
+// не піднімаючись наверх). Стан один — `MS[key].selected`, тому екземпляри шукаються
+// за data-атрибутом, а не за id: id мусить бути унікальним, а список — ні.
+function msLists(key) { return document.querySelectorAll(`[data-ms-list="${key}"]`); }
 function buildMs(key, items) {
   MS[key].all = items;
-  const listEl = document.getElementById('ms-'+key+'-list');
-  if (!listEl) return;
-  listEl.innerHTML = items.map(v => `
+  const html = items.map(v => `
     <label class="ms-item">
       <input type="checkbox" value="${escHtml(v)}" ${MS[key].selected.has(v)?'checked':''} onchange="msToggle('${key}', this.value, this.checked)">
       ${MS[key].labels?.[v] || v}
     </label>`).join('');
+  msLists(key).forEach(el => { el.innerHTML = html; });
   updateMsBadge(key);
 }
 
@@ -1675,33 +1683,31 @@ function msNone(msId) {
 }
 
 function updateMsBadge(key) {
-  const badge = document.getElementById('ms-'+key+'-badge');
-  const btn   = badge?.parentElement;
-  if (!badge) return;
   const n = MS[key].selected.size;
-  if (n === 0) {
-    badge.textContent=''; badge.classList.remove('vis');
-    if (btn) btn.childNodes[0].textContent = 'Всі ';
-  } else {
-    badge.textContent = n; badge.classList.add('vis');
-    if (btn) btn.childNodes[0].textContent = n===1 ? (MS[key].labels?.[[...MS[key].selected][0]] || [...MS[key].selected][0]).slice(0,12)+' ' : n+' вибрано ';
-  }
+  const lbl = n === 0 ? 'Всі '
+            : n === 1 ? (MS[key].labels?.[[...MS[key].selected][0]] || [...MS[key].selected][0]).slice(0,12)+' '
+            : n+' вибрано ';
+  document.querySelectorAll(`[data-ms-badge="${key}"]`).forEach(badge => {
+    const btn = badge.parentElement;
+    badge.textContent = n === 0 ? '' : n;
+    badge.classList.toggle('vis', n > 0);
+    if (btn) btn.childNodes[0].textContent = lbl;
+  });
 }
 
-function msSearch(msId, q) {
-  const key = msId.replace('ms-','');
-  const lq = q.toLowerCase();
-  const listEl = document.getElementById('ms-'+key+'-list');
+// Пошук діє на СВОЄМУ екземплярі (той, у якому стоїть поле), а не на всіх одразу:
+// інакше набраний у блоці текст ховав би рядки і у верхньому фільтрі.
+function msSearchEl(input) {
+  const lq = (input.value || '').toLowerCase();
+  const listEl = input.closest('.ms')?.querySelector('[data-ms-list]');
   if (!listEl) return;
   listEl.querySelectorAll('.ms-item').forEach(el => {
     el.style.display = el.textContent.toLowerCase().includes(lq) ? '' : 'none';
   });
 }
-
-function toggleMs(id) {
-  const el = document.getElementById(id);
+function toggleMsEl(btn) {
+  const el = btn.closest('.ms');
   const isOpen = el.classList.contains('open');
-  // close all
   document.querySelectorAll('.ms.open').forEach(m => m.classList.remove('open'));
   if (!isOpen) el.classList.add('open');
 }
@@ -2135,6 +2141,7 @@ function barCell(val, pctVal, color) {
 
 // ─── Main render ───────────────────────────────────────
 function render() {
+  renderDimFilters();
   renderNoDupsBtn();
   saveUIState();
   // Вік кеша статусів — на самій кнопці: бейджі гаснуть через FB_STATUS_TTL_H, і без
@@ -3878,6 +3885,37 @@ function resetFilters() {
   ['manager','user','campaign','adset','creo','ad_funnel','cat'].forEach(k=>{ MS[k].selected.clear(); });
   initFilters();
   render();
+}
+
+// Мультиселект усередині блоку розрізу. Розмітка та сама, що в рядку фільтрів, і стан
+// той самий (`MS[key]`), тому каскад працює без окремого коду: вибір кампанії звужує
+// список адсетів (`rebuildAdsetOptions`), вибір адсета — список крео, а `filterData`
+// застосовує вибір до всіх таблиць і цін разом.
+const DIM_FILTERS = {
+  campaigns: [['campaign', 'Кампанія']],
+  adsets:    [['campaign', 'Кампанія'], ['adset', 'Адсет']],
+  creos:     [['campaign', 'Кампанія'], ['adset', 'Адсет'], ['creo', 'Крео']],
+};
+function msWidget(key, label) {
+  return `<div class="fg"><span class="fl">${label}</span>
+    <div class="ms">
+      <div class="ms-btn" onclick="toggleMsEl(this)">Всі<span class="ms-badge" data-ms-badge="${key}"></span><span class="ms-arrow">▾</span></div>
+      <div class="ms-panel">
+        <div class="ms-search"><input placeholder="Пошук..." oninput="msSearchEl(this)"></div>
+        <div class="ms-actions"><span class="ms-action" onclick="msAll('${key}')">Всі</span><span class="ms-action" onclick="msNone('${key}')">Жодного</span></div>
+        <div class="ms-list" data-ms-list="${key}"></div>
+      </div>
+    </div></div>`;
+}
+// Малюємо ОДИН раз: перемальовування на кожен render() закривало б відкриту панель
+// і гасило набраний у пошуку текст просто від кліку по чекбоксу.
+function renderDimFilters() {
+  for (const [tab, keys] of Object.entries(DIM_FILTERS)) {
+    const box = document.getElementById('dimflt-' + tab);
+    if (!box || box.children.length) continue;
+    box.innerHTML = keys.map(([k, l]) => msWidget(k, l)).join('');
+    keys.forEach(([k]) => buildMs(k, MS[k].all));
+  }
 }
 
 // Підпис кнопки показує СТАН, а не дію: «Скинути» поруч теж називає себе, і «Без дублів»
