@@ -7057,39 +7057,63 @@ async function fbCollectAccounts(tokens, onStatus) {
   const bad = [], perToken = [];
   for (let ti = 0; ti < tokens.length; ti++) {
     const { label, token } = tokens[ti];
-    const info = { label, accounts: 0, fresh: 0 };
+    const info = { label, accounts: 0, fresh: 0, src: [] };
     perToken.push(info);
     const say = m => onStatus && onStatus(`[${ti + 1}/${tokens.length}] ${label}: ${m}`);
-    try {
-      say('отримую кабінети…');
-      let accs = await fbPages(`${FB_API}/me/adaccounts?fields=id,name,account_status&limit=200&access_token=${token}`);
+    // КОЖНЕ джерело — у власному try: падіння одного не забирає інші. До 25.11.2026
+    // особисті кабінети й BM стояли в одному try, і токен, у якого `me/adaccounts`
+    // віддає помилку (так відповідає токен системного користувача — особистого вузла
+    // в нього немає), не давав ЖОДНОГО кабінету, хоча його BM читався нормально.
+    // Гірше: такий токен ішов у «неробочі», і дашборд пропонував його видалити.
+    const accs = [];
+    const from = async (name, fn) => {
       try {
-        say('перевіряю Business Manager…');
-        for (const biz of await fbPages(`${FB_API}/me/businesses?fields=id,name&limit=50&access_token=${token}`, 5)) {
-          for (const edge of ['owned_ad_accounts', 'client_ad_accounts']) {
-            accs = accs.concat(await fbPages(`${FB_API}/${biz.id}/${edge}?fields=id,name,account_status&limit=200&access_token=${token}`));
-          }
+        const got = await fn();
+        accs.push(...got);
+        info.src.push(`${name}: ${got.length}`);
+      } catch (e) { info.src.push(`${name}: ✕ ${e.message}`); return e; }
+    };
+    say('особисті кабінети…');
+    const e1 = await from('me/adaccounts', () => fbPages(`${FB_API}/me/adaccounts?fields=id,name,account_status&limit=200&access_token=${token}`));
+    say('кабінети Business Manager…');
+    const e2 = await from('me/businesses', async () => {
+      const out = [];
+      for (const biz of await fbPages(`${FB_API}/me/businesses?fields=id,name&limit=50&access_token=${token}`, 5)) {
+        for (const edge of ['owned_ad_accounts', 'client_ad_accounts']) {
+          // Кожне ребро окремо: BM, у якому немає прав на owned_ad_accounts, мусить
+          // далі віддати client_ad_accounts — і навпаки. Один спільний try на весь
+          // обхід забирав усі кабінети всіх BM через збій на одному ребрі.
+          try {
+            out.push(...await fbPages(`${FB_API}/${biz.id}/${edge}?fields=id,name,account_status&limit=200&access_token=${token}`));
+          } catch (e) { info.src.push(`${biz.name || biz.id}/${edge}: ✕ ${e.message}`); }
         }
-      } catch (e2) {
-        // Токен без business_management падає тут; особисті кабінети лишаються робочими.
-        if (!accs.length) throw e2;
-        info.note = 'BM недоступний: ' + e2.message;
       }
-      info.accounts = accs.length;
-      for (const acc of accs) {
-        if (CLOSED.includes(acc.account_status)) continue;
-        const id = acc.id.startsWith('act_') ? acc.id : `act_${acc.id}`;
-        const rec = byId.get(id);
-        if (rec) {
-          if (!rec.tokens.some(t => t.token === token)) rec.tokens.push({ label, token });
-          continue;
-        }
-        byId.set(id, { acc: { ...acc, id }, tokens: [{ label, token }] });
-        info.fresh++;
+      return out;
+    });
+    // Кабінети, призначені користувачу токена напряму (системний чи бізнес-користувач):
+    // у me/adaccounts їх немає. Без ретраїв: токен звичайного користувача віддає тут
+    // «nonexisting field», і чотири спроби додавали б по 6 с на кожен токен.
+    say('призначені кабінети…');
+    const e3 = await from('me/assigned_ad_accounts', () => fbPages(`${FB_API}/me/assigned_ad_accounts?fields=id,name,account_status&limit=200&access_token=${token}`, 5, 0));
+    if (!accs.length) {
+      const e = e1 || e2 || e3;
+      info.error = e ? e.message : 'кабінетів не знайдено';
+      // У bad — лише коли токен не дав НІЧОГО: інакше дашборд пропонує видалити
+      // робочий токен через збій одного джерела з трьох.
+      if (e) bad.push({ label, token, msg: e.message, fatal: !!e.fbFatal });
+      continue;
+    }
+    info.accounts = accs.length;
+    for (const acc of accs) {
+      if (CLOSED.includes(acc.account_status)) continue;
+      const id = acc.id.startsWith('act_') ? acc.id : `act_${acc.id}`;
+      const rec = byId.get(id);
+      if (rec) {
+        if (!rec.tokens.some(t => t.token === token)) rec.tokens.push({ label, token });
+        continue;
       }
-    } catch (e) {
-      info.error = e.message;
-      bad.push({ label, token, msg: e.message, fatal: !!e.fbFatal });
+      byId.set(id, { acc: { ...acc, id }, tokens: [{ label, token }] });
+      info.fresh++;
     }
   }
   return { accounts: [...byId.values()], bad, perToken };
@@ -7111,8 +7135,8 @@ async function fbWithTokens(acc, fn) {
 // статусу перетирається наступним, і прогін виглядає успішним.
 const fbAccReport = perToken => perToken.map(t =>
   `${t.label || 'без назви'}: ` + (t.error ? '✕ ' + t.error
-    : `кабінетів ${t.accounts}` + (t.fresh !== t.accounts ? `, своїх ${t.fresh}` : '')
-      + (t.note ? ` · ${t.note}` : ''))).join('\n• ');
+    : `кабінетів ${t.accounts}` + (t.fresh !== t.accounts ? `, своїх ${t.fresh}` : ''))
+  + (t.src && t.src.length ? `\n   ${t.src.join('\n   ')}` : '')).join('\n• ');
 
 // Тягне статус (ACTIVE/PAUSED/…) кампаній + адсетів + крео з FB і кешує у localStorage.
 // Кожен елемент індексуємо і за назвою, і за FB-id → бейдж 🟢/⚪ у таблицях
@@ -7567,7 +7591,10 @@ async function startFBSync(mode = 'full') {
     // виглядає успішним, хоча цифри приїхали лише з першого токена (Артем, 25.11.2026).
     console.log('FB токени →\n• ' + fbAccReport(col.perToken));
     const mute = col.perToken.filter(t => t.error || !t.accounts);
-    if (mute.length) alert('⚠ Токени без кабінетів — їх даних у дашборді немає:\n• ' + fbAccReport(mute)
+    const probs = [].concat(
+      mute.length ? ['Токени без кабінетів:\n• ' + fbAccReport(mute)] : [],
+      accErrors.length ? ['Кабінети, що не віддали даних:\n• ' + accErrors.join('\n• ')] : []);
+    if (probs.length) alert('⚠ Не всі дані приїхали:\n\n' + probs.join('\n\n')
       + '\n\nПотрібні права ads_read і business_management, а користувач токена має бути адміном BM.');
 
     setFBProgress(100);
