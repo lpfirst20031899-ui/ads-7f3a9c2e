@@ -7044,6 +7044,76 @@ function toggleFBPanel() {
   if (p) p.style.display = p.style.display === 'none' ? '' : 'none';
 }
 
+// Кабінети всіх токенів — одне місце на обидва прогони (цифри кабінетів і статуси).
+// Три джерела на токен: me/adaccounts, і по кожному BM з me/businesses —
+// owned_ad_accounts та client_ad_accounts. Статуси раніше питали лише me/adaccounts,
+// тому токен, у якого всі кабінети лежать на BM, не давав жодного бейджа: на екрані
+// були дані лише по першому токену (Артем, 25.11.2026).
+// Кабінет тримає СПИСОК токенів, що його бачать: видимість — ще не доступ до даних,
+// токен з business_management бачить партнерський кабінет, а цифри віддає інший.
+async function fbCollectAccounts(tokens, onStatus) {
+  const CLOSED = [101];
+  const byId = new Map();   // act_… → { acc, tokens: [{label, token}] }
+  const bad = [], perToken = [];
+  for (let ti = 0; ti < tokens.length; ti++) {
+    const { label, token } = tokens[ti];
+    const info = { label, accounts: 0, fresh: 0 };
+    perToken.push(info);
+    const say = m => onStatus && onStatus(`[${ti + 1}/${tokens.length}] ${label}: ${m}`);
+    try {
+      say('отримую кабінети…');
+      let accs = await fbPages(`${FB_API}/me/adaccounts?fields=id,name,account_status&limit=200&access_token=${token}`);
+      try {
+        say('перевіряю Business Manager…');
+        for (const biz of await fbPages(`${FB_API}/me/businesses?fields=id,name&limit=50&access_token=${token}`, 5)) {
+          for (const edge of ['owned_ad_accounts', 'client_ad_accounts']) {
+            accs = accs.concat(await fbPages(`${FB_API}/${biz.id}/${edge}?fields=id,name,account_status&limit=200&access_token=${token}`));
+          }
+        }
+      } catch (e2) {
+        // Токен без business_management падає тут; особисті кабінети лишаються робочими.
+        if (!accs.length) throw e2;
+        info.note = 'BM недоступний: ' + e2.message;
+      }
+      info.accounts = accs.length;
+      for (const acc of accs) {
+        if (CLOSED.includes(acc.account_status)) continue;
+        const id = acc.id.startsWith('act_') ? acc.id : `act_${acc.id}`;
+        const rec = byId.get(id);
+        if (rec) {
+          if (!rec.tokens.some(t => t.token === token)) rec.tokens.push({ label, token });
+          continue;
+        }
+        byId.set(id, { acc: { ...acc, id }, tokens: [{ label, token }] });
+        info.fresh++;
+      }
+    } catch (e) {
+      info.error = e.message;
+      bad.push({ label, token, msg: e.message, fatal: !!e.fbFatal });
+    }
+  }
+  return { accounts: [...byId.values()], bad, perToken };
+}
+
+// Запит по кабінету — усіма його токенами по черзі, перший успішний виграє. Без цього
+// кабінет діставався тому токену, який перший його ПОКАЗАВ, і якщо той не має прав на
+// дані — кабінет пропадав цілком, хоча інший токен читає його нормально.
+async function fbWithTokens(acc, fn) {
+  let lastErr;
+  for (const t of acc.tokens) {
+    try { const val = await fn(t.token); acc.used = t.token; return val; }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('кабінет без робочого токена');
+}
+
+// Звіт по токенах. Токен, що не дав жодного кабінету, інакше ніде не видно: рядок
+// статусу перетирається наступним, і прогін виглядає успішним.
+const fbAccReport = perToken => perToken.map(t =>
+  `${t.label || 'без назви'}: ` + (t.error ? '✕ ' + t.error
+    : `кабінетів ${t.accounts}` + (t.fresh !== t.accounts ? `, своїх ${t.fresh}` : '')
+      + (t.note ? ` · ${t.note}` : ''))).join('\n• ');
+
 // Тягне статус (ACTIVE/PAUSED/…) кампаній + адсетів + крео з FB і кешує у localStorage.
 // Кожен елемент індексуємо і за назвою, і за FB-id → бейдж 🟢/⚪ у таблицях
 // «Кампанії», «Адсети», «Крео» (та в Аналітику). Що не сматчилось — без бейджа.
@@ -7056,7 +7126,6 @@ async function fbSyncCampaignStatus() {
   // ⚡ ЛЕГКА ВЕРСІЯ (v3): тільки активні (серверний фільтр), тільки НЕзакриті кабінети,
   // 3 рівні паралельно на кабінет, дедуп кабінетів, ліміт сторінок. + діагностика в кінці.
   const t0 = Date.now();
-  const CLOSED = [101];
   const FILTER_ACTIVE = encodeURIComponent(JSON.stringify([{field:'effective_status',operator:'IN',value:['ACTIVE']}]));
   const nk = s => (s||'').trim().toLowerCase();
   const camp = {}, adset = {}, creo = {};
@@ -7067,23 +7136,13 @@ async function fbSyncCampaignStatus() {
   let nAccTotal = 0;
   const bad = [];   // оголошено поза try — прибирання мертвих токенів іде у finally
   try {
-    // 1) Унікальні НЕзакриті кабінети по всіх токенах.
-    // Мертвий токен у списку НЕ валить увесь прогон — записуємо його в bad і йдемо далі.
-    // Живцем: у списку лежали два токени від видаленого FB-додатку (код 190), і кнопка
-    // «Статуси FB» падала цілком, хоча решта токенів робоча.
-    const seen = new Set(), accounts = [];
-    for (const tk of tokens) {
-      let accs;
-      try {
-        accs = await fbPages(`${FB_API}/me/adaccounts?fields=id,account_status&limit=200&access_token=${tk.token}`);
-      } catch (e) { bad.push({ label: tk.label, token: tk.token, msg: e.message, fatal: !!e.fbFatal }); continue; }
-      nAccTotal += accs.length;
-      for (const acc of accs) {
-        if (CLOSED.includes(acc.account_status)) continue;
-        const id = acc.id.startsWith('act_') ? acc.id : `act_${acc.id}`;
-        if (!seen.has(id)) { seen.add(id); accounts.push({ id, token: tk.token }); }
-      }
-    }
+    // 1) Унікальні НЕзакриті кабінети по всіх токенах — тим самим збирачем, що й цифри:
+    // власний перелік тут питав лише me/adaccounts і втрачав усі кабінети BM.
+    // Мертвий токен у списку НЕ валить увесь прогон — він іде в bad, решта працює.
+    const col = await fbCollectAccounts(tokens, m => { if (btn) btn.textContent = '⏳ ' + m; });
+    const accounts = col.accounts;
+    bad.push(...col.bad);
+    nAccTotal = col.perToken.reduce((a, t) => a + t.accounts, 0);
     if (!accounts.length) {
       throw new Error(bad.length
         ? `жоден токен не працює:\n• ${fbBadList(bad)}`
@@ -7092,11 +7151,12 @@ async function fbSyncCampaignStatus() {
     // 2) Кабінети послідовно, але 3 рівні — паралельно (макс 3 запити одночасно).
     // Кабінет без прав (коди 200/10) пропускаємо — раніше він теж обривав усе оновлення.
     let done = 0, skipped = 0;
-    for (const { id, token } of accounts) {
-      const q = lvl => `${FB_API}/${id}/${lvl}?fields=id,name&filtering=${FILTER_ACTIVE}&limit=500&access_token=${token}`;
+    for (const item of accounts) {
+      const q = (lvl, token) => `${FB_API}/${item.acc.id}/${lvl}?fields=id,name&filtering=${FILTER_ACTIVE}&limit=500&access_token=${token}`;
+      const pull = lvl => fbWithTokens(item, token => fbPages(q(lvl, token)));
       // allSettled, а не all: рівень без прав (або завеликий обсяг на /ads) забирав
       // із собою два інші, і кабінет лишався зовсім без бейджів — хоча кампанії прийшли.
-      const res = await Promise.allSettled([fbPages(q('campaigns')), fbPages(q('adsets')), fbPages(q('ads'))]);
+      const res = await Promise.allSettled([pull('campaigns'), pull('adsets'), pull('ads')]);
       const lvls = [['camp', camp], ['adset', adset], ['creo', creo]];
       let okAny = false;
       res.forEach((r, i) => {
@@ -7116,7 +7176,7 @@ async function fbSyncCampaignStatus() {
     render();
     // Журнал перейменувань — після запису статусів: він повільний, а бейджі від нього
     // не залежать. Раніше він стояв перед записом, і кнопка висла на «2/2».
-    const ren = await fbSyncRenames(accounts, (n, all) => {
+    const ren = await fbSyncRenames(accounts.map(a => ({ id: a.acc.id, token: a.used || a.tokens[0].token })), (n, all) => {
       if (btn) btn.textContent = `⏳ журнал ${n}/${all}`;
     });
     if (applyAdAliases()) render();
@@ -7132,6 +7192,7 @@ async function fbSyncCampaignStatus() {
       + (kept.dropped.length ? `\n⚠ у кеш не влізло (бейджі зникнуть після перезавантаження): ${kept.dropped.join(', ')}` : '')
       + (skipped ? `\n⚠ пропущено кабінетів без прав: ${skipped}` : '')
       + (Object.keys(lvlFail).length ? `\n⚠ рівні з помилкою (решта рівнів кабінету збереглись): ${Object.entries(lvlFail).map(([k,v]) => k+' ×'+v).join(', ')}` : '')
+      + `\n🔑 токени:\n• ${fbAccReport(col.perToken)}`
       + (bad.length ? `\n⚠ неробочі токени:\n• ${fbBadList(bad)}` : '');
     console.log('FB status v3 →', diag);
     alert(`✅ Статуси FB оновлено (v3).\n${diag}\n\nЯкщо кабінетів дуже багато або час великий — скажи, обмежимо конкретними кабінетами.`);
@@ -7422,89 +7483,30 @@ async function startFBSync(mode = 'full') {
     const until = localYMD(now);
     const timeRange = JSON.stringify({ since, until });
 
-    const CLOSED = [101];
     const allRows = [];
     const accErrors = [];   // справжні відповіді FB по кабінетах, що впали
 
-    // ── Step 1: collect all unique accounts across all tokens ─
-    // Each account is fetched only once (by the first token that has access to it)
-    // to avoid double-counting spend when multiple tokens share the same ad accounts.
+    // ── Крок 1: кабінети всіх токенів одним збирачем (див. fbCollectAccounts) ──
+    // Кабінет, видний кільком токенам, лежить тут один раз зі списком своїх токенів:
+    // двічі тягнути ті самі цифри не можна — вони б склались.
     setFBStatus('Збираю список кабінетів...', 'var(--muted)');
-    const seenAccountIds = new Set();
-    const accountQueue   = []; // [{acc, token, label}]
-    const badTokens      = [];
-
-    for (let ti = 0; ti < tokens.length; ti++) {
-      const { label, token } = tokens[ti];
-      setFBStatus(`[${ti+1}/${tokens.length}] ${label}: отримую кабінети...`, 'var(--muted)');
-      try {
-        // Use fetchAllPages to handle >50 accounts
-        async function fetchAccountPages(url) {
-          const items = [];
-          while (url) {
-            const j = await fbGraphJSON(url);   // ретраї транзиентних помилок FB
-            (j.data || []).forEach(x => items.push(x));
-            url = j.paging?.next || null;
-          }
-          return items;
-        }
-        // 1) Personal ad accounts
-        let accsAll = await fetchAccountPages(
-          `${FB_API}/me/adaccounts?fields=id,name,account_status&limit=200&access_token=${token}`
-        );
-        // 2) Кабінети всіх Business Manager токена — опитуємо завжди, а не лише коли
-        // me/adaccounts порожній: один особистий кабінет у токені ховав усі кабінети BM
-        // (живцем 1 кабінет замість 7 на двох BM). Дублі знімає seenAccountIds нижче.
-        setFBStatus(`[${ti+1}/${tokens.length}] ${label}: перевіряю Business Manager...`, 'var(--muted)');
-        try {
-          const bizJ = await fbGraphJSON(`${FB_API}/me/businesses?fields=id,name&limit=50&access_token=${token}`);
-          for (const biz of bizJ.data || []) {
-            // owned — кабінети самого BM, client — віддані партнером; беремо обидва списки:
-            // BM з власними кабінетами теж може мати партнерські.
-            for (const edge of ['owned_ad_accounts', 'client_ad_accounts']) {
-              accsAll = accsAll.concat(await fetchAccountPages(
-                `${FB_API}/${biz.id}/${edge}?fields=id,name,account_status&limit=200&access_token=${token}`
-              ));
-            }
-          }
-        } catch (e2) {
-          // Токен без business_management падає тут; якщо особисті кабінети вже є — не ламаємо прогін.
-          if (!accsAll.length) throw e2;
-        }
-        if (!accsAll.length) {
-          setFBStatus(`⚠ ${label}: кабінетів не знайдено. Перевір права ads_read або доступ до Business Manager`, 'var(--c)');
-          if (tokens.length === 1) { if (btn) btn.disabled = false; return; }
-          continue;
-        }
-        for (const acc of accsAll) {
-          if (CLOSED.includes(acc.account_status)) continue;
-          const normId = acc.id.startsWith('act_') ? acc.id : `act_${acc.id}`;
-          if (!seenAccountIds.has(normId)) {
-            seenAccountIds.add(normId);
-            accountQueue.push({ acc, token, label });
-          }
-        }
-      } catch(e) {
-        setFBStatus(`⚠ ${label}: ${e.message}`, 'var(--c)');
-        badTokens.push({ label, token, msg: e.message, fatal: !!e.fbFatal });
-        continue; // ponytail: try next token, outer finally re-enables btn
-      }
-    }
-    fbOfferDropDead(badTokens);
+    const col = await fbCollectAccounts(tokens, m => setFBStatus(m, 'var(--muted)'));
+    const accountQueue = col.accounts;
+    fbOfferDropDead(col.bad);
 
     const totalAccounts = accountQueue.length;
-    if (!totalAccounts) throw new Error('Жодного кабінету не знайдено. Токени діють 60 днів — онови на developers.facebook.com/tools/accesstoken');
+    if (!totalAccounts) throw new Error('Жодного кабінету не знайдено. Токени діють 60 днів — онови на developers.facebook.com/tools/accesstoken\n• ' + fbAccReport(col.perToken));
 
-    // ── Step 2: fetch insights for each unique account ────────
+    // ── Крок 2: цифри по кожному кабінету ─────────────────────
     for (let i = 0; i < accountQueue.length; i++) {
-      const { acc, token, label } = accountQueue[i];
+      const item = accountQueue[i], acc = item.acc;
       const pct = Math.round((i / accountQueue.length) * 80) + 10;
       setFBProgress(pct);
       setFBStatus(`[${i+1}/${accountQueue.length}] ${acc.name || acc.id}...`, 'var(--muted)');
       try {
-        const rows = await fbFetchInsights(acc.id, timeRange, token, (c, all) => {
+        const rows = await fbWithTokens(item, token => fbFetchInsights(acc.id, timeRange, token, (c, all) => {
           if (all > 1) setFBStatus(`[${i+1}/${accountQueue.length}] ${acc.name || acc.id}: вікно ${c}/${all}…`, 'var(--muted)');
-        });
+        }));
         allRows.push(...rows);
       } catch(e) {
         // Причину зберігаємо: раніше вона лишалась тільки в console.warn, і коли падали
@@ -7516,7 +7518,7 @@ async function startFBSync(mode = 'full') {
 
     // Журнал перейменувань — тим самим заходом: інакше витрати приїдуть під новою
     // назвою, а заявки CRM лишаться під старою, і в таблиці буде два рядки.
-    await fbSyncRenames(accountQueue.map(a => ({ id: a.acc.id, token: a.token })),
+    await fbSyncRenames(accountQueue.map(a => ({ id: a.acc.id, token: a.used || a.tokens[0].token })),
       (n, all) => setFBStatus(`Журнал перейменувань: ${n}/${all}…`, 'var(--muted)'));
 
     setFBProgress(95);
@@ -7560,6 +7562,13 @@ async function startFBSync(mode = 'full') {
 
     renderSpendFilesList();
     render();
+
+    // Токен без кабінетів інакше не видно: рядок статусу перетирає наступний, і прогін
+    // виглядає успішним, хоча цифри приїхали лише з першого токена (Артем, 25.11.2026).
+    console.log('FB токени →\n• ' + fbAccReport(col.perToken));
+    const mute = col.perToken.filter(t => t.error || !t.accounts);
+    if (mute.length) alert('⚠ Токени без кабінетів — їх даних у дашборді немає:\n• ' + fbAccReport(mute)
+      + '\n\nПотрібні права ads_read і business_management, а користувач токена має бути адміном BM.');
 
     setFBProgress(100);
     setFBStatus(MODE_DAYS[mode]
