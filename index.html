@@ -581,6 +581,7 @@ tr:hover td{background:var(--surface2)}
     </div>
   </div>
   <div id="v-campaigns-chart" style="display:none">
+    <div id="dimday-campaigns"></div>
     <div class="g1"><div class="cc"><div class="cc-title">Кількість лідів за категоріями — по кампаніях</div><div class="cc-sub">Абсолютні значення</div><div style="height:380px"><canvas id="c-camp-abs"></canvas></div></div></div>
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по кампаніях, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:380px"><canvas id="c-camp-pct"></canvas></div></div></div>
   </div>
@@ -599,6 +600,7 @@ tr:hover td{background:var(--surface2)}
     </div>
   </div>
   <div id="v-adsets-chart" style="display:none">
+    <div id="dimday-adsets"></div>
     <div class="g1"><div class="cc"><div class="cc-title">Кількість лідів за категоріями — по адсетах</div><div class="cc-sub">Абсолютні значення</div><div style="height:360px"><canvas id="c-adset-abs"></canvas></div></div></div>
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по адсетах, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:360px"><canvas id="c-adset-pct"></canvas></div></div></div>
   </div>
@@ -617,6 +619,7 @@ tr:hover td{background:var(--surface2)}
     </div>
   </div>
   <div id="v-creos-chart" style="display:none">
+    <div id="dimday-creos"></div>
     <div class="g1"><div class="cc"><div class="cc-title">Кількість лідів за категоріями — по крео</div><div class="cc-sub">Абсолютні значення</div><div style="height:360px"><canvas id="c-creo-abs"></canvas></div></div></div>
     <div class="g1"><div class="cc"><div class="cc-title">Частка категорій по крео, %</div><div class="cc-sub">100% стовпчаста діаграма</div><div style="height:360px"><canvas id="c-creo-pct"></canvas></div></div></div>
   </div>
@@ -1591,6 +1594,7 @@ function saveUIState() {
       pickMode:      _pickMode,
       onlyActive:    _onlyActive,
       stateCols:     _stateCols,
+      dimDayMetric:  _dimDayMetric,
       lostReasonPct: window._lostReasonPct,
       lostCreoPct:   window._lostCreoPct,
       lostCampPct:   window._lostCampPct,
@@ -1628,6 +1632,7 @@ function loadUIState() {
     if (s.lostSRPct     !== undefined) window._lostSRPct     = s.lostSRPct;
     if (s.lostCRPct     !== undefined) window._lostCRPct     = s.lostCRPct;
     if (s.lostCRDims)                  window._lostCRDims    = s.lostCRDims;
+    if (s.dimDayMetric) _dimDayMetric = Object.assign({campaigns:'n', adsets:'n', creos:'n'}, s.dimDayMetric);
     if (s.stateCols) _stateCols = Object.assign({unproc:true, noanswer:true, work:true}, s.stateCols);
     // Старе налаштування (одна кнопка на всі три метрики) — переносимо на всі три.
     else if (s.showStates !== undefined) _stateCols = {unproc:s.showStates, noanswer:s.showStates, work:s.showStates};
@@ -2568,6 +2573,7 @@ function buildDimSpendMaps(fromISO = document.getElementById('f-from').value,
 
 function renderCampaigns(d) {
   if (tabView.campaigns==='chart') {
+    renderDimDayChart(d, 'campaigns', 'campaign');
     const map=groupCat(d,'campaign'); const lbls=sortedKeys(map); const sh=lbls.map(shortCamp);
     makeStacked('c-camp-abs',sh,stackedDS(map,lbls));
     makeStacked('c-camp-pct',sh,pctDS(map,lbls),true);
@@ -2611,6 +2617,7 @@ function groupCatAdset(data) {
 
 function renderAdsets(d) {
   if (tabView.adsets==='chart') {
+    renderDimDayChart(d, 'adsets', 'adset');
     const map=groupCatAdset(d); const lbls=sortedKeys(map);
     makeStacked('c-adset-abs',lbls,stackedDS(map,lbls));
     makeStacked('c-adset-pct',lbls,pctDS(map,lbls),true);
@@ -2677,6 +2684,7 @@ function buildCreoSpendMap(data, sm) {
 
 function renderCreos(d) {
   if (tabView.creos==='chart') {
+    renderDimDayChart(d, 'creos', 'creo');
     const map=groupCat(d,'creo'); const lbls=sortedKeys(map);
     makeStacked('c-creo-abs',lbls,stackedDS(map,lbls));
     makeStacked('c-creo-pct',lbls,pctDS(map,lbls),true);
@@ -3290,6 +3298,177 @@ function makeDimTable(containerId, cols, rows, stateKey, lbl) {
     ? `<div class="view-toggle" style="display:inline-flex;flex-wrap:wrap;margin-bottom:8px">${pickBtn}${stBtns}${st7}</div>`
     : '';
   document.getElementById(containerId).insertAdjacentHTML('afterbegin', bar);
+}
+
+// ── Динаміка по днях у розрізі ────────────────────────
+// Одне місце на двох споживачів: блок «По днях» і графіки в блоках Кампанії /
+// Адсети / Крео. B-ліди лежать у мапі поряд з A — без них немає ціни B-ліда.
+function buildDimDays(d) {
+  const SD = getSpendData();
+  const fromISO = document.getElementById('f-from').value;
+  const toISO   = document.getElementById('f-to').value;
+  const nk = x => (x || '').trim().toLowerCase();
+  const map    = { campaign:{}, adset:{}, creo:{} };
+  const spend  = { campaign:{}, adset:{}, creo:{} };
+  const parent = { adset:{}, creo:{} };
+  const leadDays = {}, spendDays = {};
+  d.forEach(r => {
+    const dt = parseDate(r.date); if (!dt) return;
+    const dk = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+    leadDays[dk] = 1;
+    const addTo = (m, key) => {
+      if (!key || key === 'Не вказано') return;
+      if (!m[key]) m[key] = {};
+      if (!m[key][dk]) m[key][dk] = {n:0, A:0, B:0};
+      m[key][dk].n++;
+      if (r.category === 'A') m[key][dk].A++;
+      if (r.category === 'B') m[key][dk].B++;
+    };
+    addTo(map.campaign, r.campaign);
+    addTo(map.adset, r.adset);
+    addTo(map.creo, r.creo);
+    if (!parent.adset[r.adset] && r.campaign && r.campaign !== 'Не вказано') parent.adset[r.adset] = r.campaign;
+    if (!parent.creo[r.creo]  && r.campaign && r.campaign !== 'Не вказано') parent.creo[r.creo]  = r.campaign;
+  });
+  SD.forEach(x => {
+    if (fromISO && x.date < fromISO) return;
+    if (toISO   && x.date > toISO)   return;
+    spendDays[x.date] = 1;
+    const put = (m, key) => {
+      const k = nk(key); if (!k) return;
+      if (!m[k]) m[k] = {};
+      m[k][x.date] = (m[k][x.date] || 0) + x.spend;
+    };
+    put(spend.campaign, x.campaign);
+    put(spend.adset, x.adset);
+    put(spend.creo, x.ad);
+  });
+  return { days: [...new Set([...Object.keys(leadDays), ...Object.keys(spendDays)])].sort(), map, spend, parent };
+}
+
+// Значення метрики за ОДИН день. Ціна береться за той самий день, не за період.
+function dimDayVal(dayMap, spendMap, key, dk, metric) {
+  const v = dayMap[key]?.[dk]; if (!v) return 0;
+  if (metric === 'n')     return v.n;
+  if (metric === 'A')     return v.A;
+  if (metric === 'B')     return v.B || 0;
+  if (metric === 'pct_a') return v.n ? +((v.A||0)/v.n*100).toFixed(1) : 0;
+  const sp = spendMap[(key||'').trim().toLowerCase()]?.[dk] || 0;
+  if (metric === 'cpl')  return (v.n && sp)       ? +(sp/v.n).toFixed(2) : 0;
+  if (metric === 'cplA') return (v.A && sp)       ? +(sp/v.A).toFixed(2) : 0;
+  if (metric === 'cplB') return ((v.B||0) && sp)  ? +(sp/v.B).toFixed(2) : 0;
+  return 0;
+}
+
+const DIM_DAY_COLORS = ['#60a5fa','#4ade80','#f472b6','#fb923c','#a78bfa','#facc15','#34d399','#f87171'];
+
+// Лінійний графік «розріз × дні». Легенда гасить лінію, і це запам'ятовується:
+// у вибірці буває 40 кампаній, інакше графік не читається.
+function paintDimDayChart(canvasId, keys, days, valOf, cfg, hidden) {
+  const ctx = freshCanvas(canvasId); if (!ctx) return null;
+  const fmt = v => cfg.isCur ? '$' + v.toFixed(1) : cfg.pct ? v.toFixed(1) + '%' : v;
+  const chart = new Chart(ctx, {
+    type:'line',
+    data:{ labels: days.map(dk => dk.slice(8)+'.'+dk.slice(5,7)),
+      datasets: keys.map((k, i) => ({
+        label: k.length > 28 ? k.slice(0,27)+'…' : k,
+        data: days.map(dk => valOf(k, dk)),
+        borderColor: DIM_DAY_COLORS[i % DIM_DAY_COLORS.length],
+        backgroundColor: DIM_DAY_COLORS[i % DIM_DAY_COLORS.length]+'22',
+        tension:.35, pointRadius: days.length > 30 ? 2 : 4, fill:false, borderWidth:2,
+      })) },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        // cfg.noLegend — там, де вибір ліній стоїть на кнопках під заголовком:
+        // два однакові перемикачі (легенда і кнопки) розходяться між собою.
+        legend: cfg.noLegend ? {display:false}
+          : { position:'bottom', labels:{color:'#7b87ad',font:{size:10},boxWidth:12},
+              onClick:(e, item, legend) => {
+                const ch = legend.chart, i = item.datasetIndex, k = keys[i];
+                if (ch.isDatasetVisible(i)) { ch.hide(i); hidden.add(k); }
+                else { ch.show(i); hidden.delete(k); }
+              } },
+        tooltip:{ callbacks:{ title: it => it[0].label, label: it => ` ${it.dataset.label}: ${fmt(it.raw)}` } },
+      },
+      scales:{
+        x:{grid:{color:'#1e2849'},ticks:{color:'#7b87ad',maxRotation:45,font:{size:10}}},
+        y:{grid:{color:'#1e2849'},ticks:{color:'#7b87ad',callback: v => cfg.isCur ? '$'+v : cfg.pct ? v+'%' : v},beginAtZero:true},
+      },
+    },
+  });
+  reg(canvasId, chart);
+  keys.forEach((k, i) => { if (hidden.has(k)) chart.hide(i); });
+  return chart;
+}
+
+// Чотири метрики на вибір, рівно одна активна (Артем, 27.11.2026).
+const DIM_DAY_METRICS = [
+  {key:'n',    label:'Кількість',   isCur:false},
+  {key:'cpl',  label:'Ціна заявки', isCur:true},
+  {key:'cplA', label:'Ціна A',      isCur:true},
+  {key:'cplB', label:'Ціна B',      isCur:true},
+];
+let _dimDayMetric = { campaigns:'n', adsets:'n', creos:'n' };
+const _dimDayHidden = { campaigns:new Set(), adsets:new Set(), creos:new Set() };
+
+function setDimDayMetric(block, key) { _dimDayMetric[block] = key; saveUIState(); render(); }
+
+// Вибір ліній — кнопками в самому графіку (Артем, 28.11.2026). Легенда Chart.js для
+// цього не годиться: вона поза потоком кнопок і не видно, що саме вимкнено.
+// Стан живе окремо на кожен блок, тому фільтри таблиць і сусідніх блоків не чіпає.
+function toggleDimDayKey(block, key) {
+  const h = _dimDayHidden[block];
+  h.has(key) ? h.delete(key) : h.add(key);
+  render();
+}
+function setDimDayKeys(block, mode, keys) {
+  _dimDayHidden[block] = new Set(mode === 'none' ? keys : []);
+  render();
+}
+
+function renderDimDayChart(d, block, dim) {
+  const el = document.getElementById('dimday-' + block); if (!el) return;
+  const DD = buildDimDays(d);
+  const map = DD.map[dim], spend = DD.spend[dim];
+  const metric = DIM_DAY_METRICS.some(m => m.key === _dimDayMetric[block]) ? _dimDayMetric[block] : 'n';
+  const cfg = DIM_DAY_METRICS.find(m => m.key === metric);
+  // Порядок ліній стабільний — за кількістю заявок, а не за поточною метрикою:
+  // інакше перемикання метрики перефарбовувало б усі лінії.
+  const tot = k => Object.values(map[k]).reduce((a, v) => a + v.n, 0);
+  const keys = Object.keys(map).sort((a, b) => tot(b) - tot(a));
+  const btns = DIM_DAY_METRICS.map(m =>
+    `<button class="vt-btn${m.key === metric ? ' active' : ''}" onclick="setDimDayMetric('${block}','${m.key}')">${m.label}</button>`).join('');
+  // Колір смужки кнопки = колір її лінії: легенда вимкнена, інакше лінію не впізнати.
+  const hid = _dimDayHidden[block];
+  const keyBtns = keys.map((k, i) => {
+    const col = DIM_DAY_COLORS[i % DIM_DAY_COLORS.length];
+    const off = hid.has(k);
+    return `<button class="vt-btn${off ? '' : ' active'}" title="${escHtml(k)}"
+      style="border-left:3px solid ${col};${off ? 'opacity:.45' : ''}"
+      onclick="toggleDimDayKey('${block}', ${JSON.stringify(k).replace(/"/g, '&quot;')})">${escHtml(k.length > 24 ? k.slice(0, 23) + '…' : k)}</button>`;
+  }).join('');
+  const allBtns = `<button class="vt-btn" onclick='setDimDayKeys("${block}","all")'>Усі</button>`
+    + `<button class="vt-btn" onclick='setDimDayKeys("${block}","none",${JSON.stringify(keys).replace(/'/g, "&#39;")})'>Жодної</button>`;
+  el.innerHTML = `<div class="cc">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <div>
+        <div class="cc-title" style="margin:0 0 2px">Динаміка за вибрані дні</div>
+        <div class="cc-sub" style="margin:0" id="dimday-sub-${block}">${keys.length - hid.size} з ${keys.length} · ${cfg.label}</div>
+      </div>
+      <div class="view-toggle" id="dimday-btns-${block}">${btns}</div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px" id="dimday-keys-${block}">
+      <div class="view-toggle">${allBtns}</div>${keyBtns}
+    </div>
+    <div style="height:340px">${keys.length && DD.days.length
+      ? `<canvas id="c-dimday-${block}"></canvas>`
+      : '<div style="text-align:center;color:var(--muted);padding:40px">Немає даних для поточного фільтру</div>'}</div>
+  </div>`;
+  if (!keys.length || !DD.days.length) return;
+  paintDimDayChart('c-dimday-' + block, keys, DD.days,
+    (k, dk) => dimDayVal(map, spend, k, dk, metric), {...cfg, noLegend:true}, hid);
 }
 
 // Shared dimension table (campaigns / adsets / creos / managers)
@@ -4736,66 +4915,15 @@ function renderDaily(d) {
 
   // ─── Daily adset cross-analytics ─────────────────────
   (function buildDimBreakdown() {
-    const SD = getSpendData();
-    const fromISO = document.getElementById('f-from').value;
-    const toISO   = document.getElementById('f-to').value;
-    const hasSpend = SD.length > 0;
-
-    // ── Build daily lead maps by dimension ─────────────────────
-    const adsetDayMap  = {}; // {adset    -> {day -> {n,A}}}
-    const campDayMap   = {}; // {campaign -> {day -> {n,A}}}
-    const creoDayMap   = {}; // {creo     -> {day -> {n,A}}}
-    const adsetCampMap = {}; // {adset -> campaign}
-    const creoCampMap  = {}; // {creo  -> campaign}
-    d.forEach(r => {
-      const dt = parseDate(r.date); if (!dt) return;
-      const dk = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
-      const addTo = (map, key) => {
-        if (!key || key === 'Не вказано') return;
-        if (!map[key]) map[key] = {};
-        if (!map[key][dk]) map[key][dk] = {n:0,A:0};
-        map[key][dk].n++;
-        if (r.category === 'A') map[key][dk].A++;
-      };
-      addTo(adsetDayMap, r.adset);
-      addTo(campDayMap,  r.campaign);
-      addTo(creoDayMap,  r.creo);
-      if (!adsetCampMap[r.adset] && r.campaign && r.campaign !== 'Не вказано')
-        adsetCampMap[r.adset] = r.campaign;
-      if (!creoCampMap[r.creo] && r.campaign && r.campaign !== 'Не вказано')
-        creoCampMap[r.creo] = r.campaign;
-    });
-
-    // ── Build daily spend maps ──
-    const adsetDaySpend = {};
-    const campDaySpend  = {};
-    const creoDaySpend  = {};
-    const nkAs = s => (s||'').trim().toLowerCase();
-    if (hasSpend) {
-      SD.forEach(s => {
-        if (fromISO && s.date < fromISO) return;
-        if (toISO   && s.date > toISO)   return;
-        const na = nkAs(s.adset);
-        if (na) {
-          if (!adsetDaySpend[na]) adsetDaySpend[na] = {};
-          adsetDaySpend[na][s.date] = (adsetDaySpend[na][s.date]||0) + s.spend;
-        }
-        const nc = nkAs(s.campaign);
-        if (nc) {
-          if (!campDaySpend[nc]) campDaySpend[nc] = {};
-          campDaySpend[nc][s.date] = (campDaySpend[nc][s.date]||0) + s.spend;
-        }
-        const ncr = nkAs(s.ad);
-        if (ncr) {
-          if (!creoDaySpend[ncr]) creoDaySpend[ncr] = {};
-          creoDaySpend[ncr][s.date] = (creoDaySpend[ncr][s.date]||0) + s.spend;
-        }
-      });
-    }
+    // Дані — спільним збирачем (buildDimDays): ті самі мапи живлять графіки
+    // в блоках Кампанії / Адсети / Крео. `days` лишається з renderDaily.
+    const DD = buildDimDays(d);
+    const campDayMap = DD.map.campaign, adsetDayMap = DD.map.adset, creoDayMap = DD.map.creo;
+    const campDaySpend = DD.spend.campaign, adsetDaySpend = DD.spend.adset, creoDaySpend = DD.spend.creo;
+    const adsetCampMap = DD.parent.adset, creoCampMap = DD.parent.creo;
+    const nkAs = x => (x || '').trim().toLowerCase();
 
     // ── Shared config ──────────────────────────────────
-    const CHART_COLORS = ['#60a5fa','#4ade80','#f472b6','#fb923c','#a78bfa','#facc15','#34d399','#f87171'];
-    const dayLabels = days.map(dk => dk.slice(8)+'.'+dk.slice(5,7));
 
     const METRIC_CFG = [
       {key:'n',     label:'Ліди',        color:'var(--accent)', isCur:false},
@@ -4805,16 +4933,7 @@ function renderDaily(d) {
       {key:'cplA',  label:'Ціна A-ліда', color:'var(--a)',      isCur:true},
     ];
 
-    function getDayVal(dayMap, spendMap, key, dk, metric) {
-      const v = dayMap[key]?.[dk]; if (!v) return 0;
-      if (metric === 'n')     return v.n;
-      if (metric === 'A')     return v.A;
-      if (metric === 'pct_a') return v.n ? +((v.A||0)/v.n*100).toFixed(1) : 0;
-      const sp = spendMap[nkAs(key)]?.[dk] || 0;
-      if (metric === 'cpl')  return (v.n && sp) ? +(sp/v.n).toFixed(2) : 0;
-      if (metric === 'cplA') return (v.A && sp) ? +(sp/v.A).toFixed(2) : 0;
-      return 0;
-    }
+    const getDayVal = dimDayVal;   // значення метрики — одним місцем
 
     function metricBtns(activeKey, handler) {
       return `<div class="view-toggle">${METRIC_CFG.map(m => {
@@ -4882,50 +5001,10 @@ function renderDaily(d) {
 
     if (adsetViewMode === 'chart') {
       innerEl.innerHTML = `<div style="height:300px"><canvas id="c-adset-day-chart"></canvas></div>`;
-      const labeledKeys = dimKeys.map(k => k.length>28 ? k.slice(0,27)+'…' : k);
-      const aDatasets = dimKeys.map((k,i) => ({
-        label: labeledKeys[i],
-        data: days.map(dk => getDayVal(dimMap, dimSpend, k, dk, adsetMetric)),
-        borderColor: CHART_COLORS[i%CHART_COLORS.length],
-        backgroundColor: CHART_COLORS[i%CHART_COLORS.length]+'22',
-        tension:.35, pointRadius:days.length>30?2:4, fill:false, borderWidth:2
-      }));
-      const aCtx = freshCanvas('c-adset-day-chart');
-      if (aCtx) {
-        if (!window._adsetHidden) window._adsetHidden = new Set();
-        const hiddenNow = window._adsetHidden;
-        const chartInst = new Chart(aCtx, {
-          type:'line', data:{labels:dayLabels, datasets:aDatasets},
-          options:{
-            responsive:true, maintainAspectRatio:false,
-            interaction:{mode:'index',intersect:false},
-            plugins:{
-              legend:{
-                position:'bottom',
-                labels:{color:'#7b87ad',font:{size:10},boxWidth:12},
-                onClick:(e, legendItem, legend) => {
-                  const idx = legendItem.datasetIndex;
-                  const key = dimKeys[idx];
-                  const ch = legend.chart;
-                  if (ch.isDatasetVisible(idx)) { ch.hide(idx); hiddenNow.add(key); }
-                  else { ch.show(idx); hiddenNow.delete(key); }
-                  window._adsetHidden = hiddenNow;
-                }
-              },
-              tooltip:{callbacks:{
-                title:items=>items[0].label,
-                label:item=>` ${item.dataset.label}: ${adsetMCfg.isCur?'$'+item.raw.toFixed(1):adsetMetric==='pct_a'?item.raw.toFixed(1)+'%':item.raw}`
-              }}
-            },
-            scales:{
-              x:{grid:{color:'#1e2849'},ticks:{color:'#7b87ad',maxRotation:45,font:{size:10}}},
-              y:{grid:{color:'#1e2849'},ticks:{color:'#7b87ad',callback:v=>adsetMCfg.isCur?'$'+v:adsetMetric==='pct_a'?v+'%':v},beginAtZero:true}
-            }
-          }
-        });
-        reg('c-adset-day-chart', chartInst);
-        if (hiddenNow.size) dimKeys.forEach((k, idx) => { if (hiddenNow.has(k)) chartInst.hide(idx); });
-      }
+      if (!window._adsetHidden) window._adsetHidden = new Set();
+      paintDimDayChart('c-adset-day-chart', dimKeys, days,
+        (k, dk) => getDayVal(dimMap, dimSpend, k, dk, adsetMetric),
+        {isCur: adsetMCfg.isCur, pct: adsetMetric === 'pct_a'}, window._adsetHidden);
 
     } else {
       // ── Table view ──
